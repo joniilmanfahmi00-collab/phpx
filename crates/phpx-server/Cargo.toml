@@ -1,0 +1,29 @@
+[package]
+name = "phpx-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+phpx-core.workspace = true
+phpx-config.workspace = true
+phpx-runtime.workspace = true
+phpx-runtime-process.workspace = true
+phpx-worker.workspace = true
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+mime_guess.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pemfile.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots"] }
+tempfile = "3"

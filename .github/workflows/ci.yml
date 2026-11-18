@@ -1,0 +1,38 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.1"
+          components: rustfmt
+      - run: cargo fmt --check
+
+  clippy-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.1"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --workspace
+      - run: ./target/debug/phpx doctor
+      - run: ./target/debug/phpx version
+      - run: ./target/debug/phpx runtime list
+      - run: ./target/debug/phpx runtime inspect
+      - run: ./target/debug/phpx workers status
+      - run: ./target/debug/phpx workers reload
+      - run: ./target/debug/phpx metrics
+      - run: bash scripts/smoke-linux.sh
+      - run: php --version
+        continue-on-error: true

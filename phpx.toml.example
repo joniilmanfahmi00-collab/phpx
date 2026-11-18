@@ -1,0 +1,109 @@
+# PHPX example configuration - schema v1 (M4 hardening + M5 queue/scheduler/cache/storage, v0.1 developer preview, not for production SLA).
+# Copy to phpx.toml and adjust:  cp phpx.toml.example phpx.toml
+# Full lifecycle/memory/adaptive model is defined in ADR-0014 Section 2.9.
+# See docs/operations/configuration.md for documented defaults.
+# See docs/operations/queue.md + docs/operations/scheduler.md for platform services.
+schema_version = 1
+
+[server]
+# Bind address. Default 127.0.0.1 (local only). Use 0.0.0.0 in Docker/systemd behind firewall.
+host = "127.0.0.1"
+# Port. Default 8080. Override via `phpx serve --port 9000`.
+port = 8080
+# TLS via Rustls. Default false (plain HTTP, used by tests).
+# When true, both files below are required (PEM), else `phpx serve` exits 2 with actionable error.
+tls = false
+# tls_cert_file = "./certs/cert.pem"
+# tls_key_file = "./certs/key.pem"
+# Max request body. Parsed by parse_size: bytes or KB/MB/GB, K/M/G/B suffixes. Default 16MB. Oversize -> HTTP 413.
+request_body_limit = "16MB"
+
+[application]
+# App root containing document_root. Default ".". In Docker image this is /app/examples/vanilla-php.
+root = "."
+# Public dir relative to root. Default "public". Only files under here are served.
+document_root = "public"
+# Front controller for fallback routing (vanilla + frameworks). Default index.php. Must exist.
+entrypoint = "index.php"
+
+[runtime]
+# Backend. Default process. Embedded is experimental (M6.1 stub: available=false, needs native link for real use).
+mode = "process"
+# PHP target version for `phpx doctor` + `phpx runtime list`. Actual version comes from php --version.
+php_version = "8.4"
+
+[runtime.process]
+# Bounded pool (M4 hardened): min/max, never unbounded (SPEC 5.3).
+# Overload / crash-loop circuit / draining -> HTTP 503 + Retry-After: 1.
+workers = 4
+min_workers = 1
+# Logical recycle budget per pool slot (one-shot already isolates per request;
+# counts toward `recycled` in /metrics for future persistent workers).
+max_requests = 1000
+# PHP execution timeout. Default 30s. In-flight requests are bounded by this during graceful drain (Ctrl-C/SIGTERM/systemd stop).
+request_timeout_seconds = 30
+# Startup timeout (reserved for supervised workers).
+startup_timeout_seconds = 10
+# Simplified memory limit (advisory in M4; full soft/hard guardian per ADR-0014 is incremental).
+memory_limit = "256M"
+# Bounded queue: None = auto (workers*4, min 16). Explicit 1-100000 overrides.
+# queue_bound = 16
+# How long a request waits for a worker slot before 503. Default 2s.
+queue_wait_timeout_seconds = 2
+# Graceful drain budget on Ctrl-C/SIGTERM. Default 10s.
+shutdown_drain_timeout_seconds = 10
+# Crash-loop protection (ADR-0014 2.6): after N consecutive failures, fast-503 for backoff window.
+restart_max_retries = 5
+restart_backoff_ms = 250
+restart_backoff_max_ms = 30000
+
+[runtime.embedded]
+# Keep false unless experimenting. mode=embedded requires enabled=true (experimental, process stays default).
+enabled = false
+
+# Queue (M5 phase 1 real): memory = ephemeral dev, sqlite = durable single-node baseline.
+# `phpx queue status|push|work` are real (exit 0; push refused on memory with exit 2).
+[queue]
+driver = "sqlite"
+database = "./data/queue.db"
+workers = 2
+
+# Scheduler (M5 phase 2 real): single-pass dispatch-only, never executes PHP.
+# `phpx scheduler run` enqueues due jobs into [queue]; run every minute via systemd timer/cron.
+# Disabled / no schedules = exit 0 + note. See docs/operations/scheduler.md.
+[scheduler]
+enabled = false
+history_file = "./data/scheduler.db"
+poll_interval_secs = 30
+# Example (uncomment to enable):
+# [[scheduler.schedules]]
+# id = "tick"
+# cron = "* * * * *"
+# timezone = "Asia/Jakarta"
+# payload = "{\"job\":\"tick\"}"
+# enabled = true
+# missed_policy = "skip"
+# max_retries = 3
+
+# Cache (M5 phase 3 real): memory = ephemeral, filesystem = durable single-node.
+# `phpx cache status|get|set|clear` are real (exit 0). Redis deferred.
+[cache]
+driver = "memory"
+max_memory = "128MB"
+# dir = "./data/cache"
+# max_entries = 1000
+
+# Storage (M5 phase 3 real): local = durable FS, s3 = prototype (config real, transport deferred).
+# `phpx storage status|put|get|list` are real (exit 0; s3 data ops deferred with note).
+[storage]
+driver = "local"
+root = "./data/storage"
+# endpoint = "https://s3.example"
+# bucket = "phpx-dev"
+# region = "auto"
+
+[observability]
+# JSON logs when `phpx serve --json` or RUST_LOG JSON subscriber. Access logs always include request_id, method, path, status, duration_ms + x-request-id header.
+json_logs = true
+# M4 metrics = logs + GET /healthz + GET /readyz + GET /metrics (Prometheus text). See `phpx metrics`.
+metrics = true

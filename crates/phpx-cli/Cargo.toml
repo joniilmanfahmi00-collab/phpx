@@ -1,0 +1,23 @@
+[package]
+name = "phpx-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "phpx"
+path = "src/main.rs"
+
+[dependencies]
+phpx-core.workspace = true
+phpx-config.workspace = true
+phpx-server.workspace = true
+phpx-queue.workspace = true
+phpx-scheduler.workspace = true
+phpx-cache.workspace = true
+phpx-storage.workspace = true
+phpx-runtime-embedded.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio.workspace = true

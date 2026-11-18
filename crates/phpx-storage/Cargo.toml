@@ -1,0 +1,15 @@
+[package]
+name = "phpx-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "PHPX M5 storage drivers: local filesystem + S3-compatible prototype"
+
+[dependencies]
+phpx-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

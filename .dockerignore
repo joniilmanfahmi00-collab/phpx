@@ -1,0 +1,12 @@
+target/
+.git/
+.github/
+docs/
+cargo_out*.txt
+*.log
+run_bg.py
+run_tests.py
+patch_health.py
+fix_*.py
+data/
+certs/

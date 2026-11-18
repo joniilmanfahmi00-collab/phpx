@@ -1,0 +1,10 @@
+[package]
+name = "phpx-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+phpx-core.workspace = true
+phpx-runtime.workspace = true
+phpx-runtime-process.workspace = true

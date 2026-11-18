@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/phpx-core",
+  "crates/phpx-config",
+  "crates/phpx-cli",
+  "crates/phpx-runtime",
+  "crates/phpx-runtime-process",
+  "crates/phpx-runtime-embedded",
+  "crates/phpx-worker",
+  "crates/phpx-server",
+  "crates/phpx-queue",
+  "crates/phpx-scheduler",
+  "crates/phpx-cache",
+  "crates/phpx-storage",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["PHPX Contributors"]
+
+[workspace.dependencies]
+phpx-core = { path = "crates/phpx-core" }
+phpx-config = { path = "crates/phpx-config" }
+phpx-runtime = { path = "crates/phpx-runtime" }
+phpx-runtime-process = { path = "crates/phpx-runtime-process" }
+phpx-runtime-embedded = { path = "crates/phpx-runtime-embedded" }
+phpx-worker = { path = "crates/phpx-worker" }
+phpx-server = { path = "crates/phpx-server" }
+phpx-queue = { path = "crates/phpx-queue" }
+phpx-cache = { path = "crates/phpx-cache" }
+phpx-storage = { path = "crates/phpx-storage" }
+phpx-scheduler = { path = "crates/phpx-scheduler" }
+chrono = "0.4"
+chrono-tz = "0.10"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = { version = "0.8", features = ["parse", "display"] }
+clap = { version = "4", features = ["derive", "env"] }
+wait-timeout = "0.2"
+tokio = { version = "1", features = ["full"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto"] }
+http-body-util = "0.1"
+bytes = "1"
+mime_guess = "2"
+uuid = { version = "1", features = ["v4"] }
+rustls = "0.23"
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+

@@ -1,0 +1,31 @@
+[Unit]
+Description=PHPX v0.1 developer preview - Rust-powered PHP application server
+Documentation=https://github.com/phpx/phpx
+After=network.target
+
+[Service]
+Type=simple
+# Run as non-root. Create once: sudo useradd -r -m -s /usr/sbin/nologin phpx
+User=phpx
+Group=phpx
+# Adjust to your install path and app root.
+WorkingDirectory=/opt/phpx/examples/vanilla-php
+ExecStart=/usr/local/bin/phpx serve --config /etc/phpx/phpx.toml
+# Graceful drain: Ctrl-C/systemd stop stops accepting, in-flight PHP bounded by request_timeout_seconds.
+KillSignal=SIGINT
+TimeoutStopSec=40
+Restart=on-failure
+RestartSec=3
+# Hardening (tune for your distro; app code stays trusted in v0.1, see limitations.md).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/phpx/data /var/log/phpx
+# Config + logs.
+Environment=RUST_LOG=info
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

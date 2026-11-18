@@ -1,0 +1,18 @@
+[package]
+name = "phpx-scheduler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "PHPX M5 scheduler: cron-compatible, timezone-aware single-node dispatch into the queue"
+
+[dependencies]
+phpx-core.workspace = true
+phpx-queue.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"
+chrono.workspace = true
