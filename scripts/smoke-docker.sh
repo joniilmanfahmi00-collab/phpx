@@ -22,7 +22,7 @@ curl -fsS "http://127.0.0.1:$PORT/healthz" | grep -q ok
 curl -fsS "http://127.0.0.1:$PORT/readyz" | grep -q ready
 curl -fsS "http://127.0.0.1:$PORT/" >/dev/null
 curl -fsS "http://127.0.0.1:$PORT/style.css" >/dev/null
-code=$(curl -o /dev/null -s -w "%{http_code}" "http://127.0.0.1:$PORT/%2e%2e/x" || true)
+code=$(curl --path-as-is -o /dev/null -s -w "%{http_code}" "http://127.0.0.1:$PORT/%2e%2e/x" || true)
 if [ "$code" != "400" ]; then echo "FAIL: traversal expected 400 got $code"; docker logs "$NAME" | tail -20; exit 1; fi
 
 echo "[docker-smoke] ALL GREEN ($IMG as non-root)"

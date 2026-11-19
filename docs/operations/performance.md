@@ -64,3 +64,11 @@ Fixture: examples/vanilla-php, workers=4, mode=process, debug build.
 - cold_ms Linux (712) > Windows (255): request pertama + spawn PHP pertama dina debug build.
   Lain regresi; baseline dicatet apa adanya.
 - Baseline lock tetep: klaim = delta vs angka di luhur, lain SLA absolut. Raw log disimpen 30 poé.
+
+### Docker (WSL Engine, image phpx:0.1.0-dev) — 2026-11-19
+
+- Build: sudo docker build -t phpx:0.1.0-dev . → 11.5 detik, 19/19 FINISHED (layer cache).
+- smoke-docker.sh: ALL GREEN (non-root check: whoami = phpx ✅, healthz/readyz//style.css/traversal-400 lulus).
+- Limit test ala operator: --cpus=1 --memory=512m → /healthz ok, /metrics counters 0 semua.
+  Wajar: container fresh + /healthz teu lewat pool, jadi completed/failed/timeouts/rejected/restarts = 0.
+- Base: rust:1.99.1-bookworm (builder) + php:8.4-cli-bookworm (runtime), user phpx (uid 10001).
