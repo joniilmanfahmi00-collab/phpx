@@ -37,6 +37,8 @@ Health: `GET /healthz` (liveness), `GET /readyz` (readiness). CLI: `phpx doctor`
 -   [Technical Specification v0.1](docs/TECHNICAL_SPEC_v0.1.md)
 -   [Roadmap](roadmap.md)
 -   [Architecture Decision Records](docs/adr/README.md)
+-   [Benchmark report (English, developer edition)](docs/PHPX-v0.1.0-rc1-benchmark-report-en.md)
+-   TODO: attach release PDF rendition (export the English report to PDF at release time)
 
 ## Initial development principles
 
