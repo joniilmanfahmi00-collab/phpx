@@ -30,7 +30,7 @@ impl LinkProbe {
             php_config_version,
             php_version_line,
             tried,
-            how_to_enable: "Linux only: sudo apt-get install -y php8.3-dev libphp8.3-embed (php8.4: php8.4-dev libphp8.4-embed); need NTS non-debug + php-embed headers per AbiPin, then PHPX_EMBED_LINK=1 cargo build -p phpx-runtime-embedded. Windows ZTS dev PHP is rejected by design.".to_string(),
+            how_to_enable: "Linux only: sudo apt-get install -y php8.3-dev libphp8.3-embed libxml2-dev zlib1g-dev libsodium-dev libargon2-dev libssl-dev libpcre2-dev (php8.4: php8.4-dev libphp8.4-embed ...); need NTS non-debug + php-embed headers per AbiPin, then PHPX_EMBED_LINK=1 cargo build -p phpx-runtime-embedded. Windows ZTS dev PHP is rejected by design.".to_string(),
         }
     }
 

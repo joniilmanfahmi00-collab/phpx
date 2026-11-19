@@ -506,6 +506,54 @@ fn cmd_doctor(as_json: bool) -> i32 {
         }),
     }
 
+    // M6 gate: embedded native-link toolchain (informational; never fails core doctor).
+    {
+        let linked = phpx_runtime_embedded::is_build_linked();
+        let abi = phpx_runtime_embedded::abi::AbiPin::pinned();
+        let cfg_out = Command::new("php-config").arg("--version").output();
+        match cfg_out {
+            Ok(o) if o.status.success() => {
+                let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                let inc = Command::new("php-config")
+                    .arg("--include-dir")
+                    .output()
+                    .map(|i| String::from_utf8_lossy(&i.stdout).trim().to_string())
+                    .unwrap_or_default();
+                let header_hit = ["sapi/embed/php_embed.h", "main/php.h"]
+                    .iter()
+                    .any(|h| std::path::Path::new(&format!("{inc}/{h}")).exists());
+                checks.push(Check {
+                    name: "php-embed-dev",
+                    ok: true,
+                    detail: format!(
+                        "php-config {v}, include-dir={} (embed header {}); linked={linked}; {}",
+                        if inc.is_empty() { "unknown" } else { &inc },
+                        if header_hit { "found" } else { "MISSING" },
+                        phpx_runtime_embedded::link::LinkProbe::probe().how_to_enable,
+                    ),
+                });
+                let _ = abi;
+            }
+            _ => {
+                checks.push(Check {
+                    name: "php-embed-dev",
+                    ok: true,
+                    detail: format!(
+                        "php-config not found (expected on Windows dev; embedded stays experimental-disabled, linked={linked}); Linux gate: {}",
+                        phpx_runtime_embedded::link::LinkProbe::probe().how_to_enable,
+                    ),
+                });
+            }
+        }
+        checks.push(Check {
+            name: "php-embed-link",
+            ok: true,
+            detail: format!(
+                "linked={linked} (opt-in native link; available=false until compat/isolation/stability gates pass; process stays default)"
+            ),
+        });
+    }
+
     let os = std::env::consts::OS;
     checks.push(Check {
         name: "os",

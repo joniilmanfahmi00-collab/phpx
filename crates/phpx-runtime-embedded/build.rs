@@ -60,8 +60,36 @@ fn main() {
             }
         }
     }
-    if libs.is_empty() {
-        libs.push("php".to_string());
+    // Debian php-config --libs lists dependencies but NOT libphp itself,
+    // so probe for the embed library file and link it explicitly.
+    // (M6 finding 2026-11-19: without this the link line has no -lphp at all.)
+    let parts: Vec<&str> = version.split(".").collect();
+    let mm = if parts.len() >= 2 { format!("{}.{}", parts[0], parts[1]) } else { version.clone() };
+    let mm_nospace = if parts.len() >= 2 { format!("{}{}", parts[0], parts[1]) } else { version.clone() };
+    let candidates = vec![format!("php{mm}"), format!("php{mm_nospace}"), "php".to_string()];
+    let mut probe_dirs = search_dirs.clone();
+    for d in ["/usr/lib/x86_64-linux-gnu", "/usr/lib", "/lib/x86_64-linux-gnu", "/lib"] {
+        if !probe_dirs.contains(&d.to_string()) {
+            probe_dirs.push(d.to_string());
+        }
+    }
+    let mut chosen: Option<String> = None;
+    for c in &candidates {
+        let f = format!("lib{c}.so");
+        if probe_dirs.iter().any(|d| std::path::Path::new(&format!("{d}/{f}")).exists()) {
+            chosen = Some(c.clone());
+            break;
+        }
+    }
+    let chosen = match chosen {
+        Some(c) => c,
+        None => {
+            warn(&format!("libphp .so not found in {probe_dirs:?} (tried {candidates:?}); staying stub (install libphpembed, e.g. sudo apt-get install -y libphp8.3-embed)"));
+            return;
+        }
+    };
+    if !libs.contains(&chosen) {
+        libs.insert(0, chosen.clone());
     }
     for d in &search_dirs {
         println!("cargo:rustc-link-search=native={d}");
