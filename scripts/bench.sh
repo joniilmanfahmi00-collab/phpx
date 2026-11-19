@@ -3,8 +3,18 @@
 # Uses wrk if available, else curl loop. Single-node, vanilla fixture.
 set -euo pipefail
 PORT="${PHPX_BENCH_PORT:-18082}"
-REQS="${1:-200}"
-CONC="${2:-10}"
+REQS=200
+CONC=10
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --port) PORT="$2"; shift 2;;
+    --requests) REQS="$2"; shift 2;;
+    --concurrency) CONC="$2"; shift 2;;
+    --help|-h) echo "Usage: bench.sh [--port 18082] [--requests 200] [--concurrency 10]"; exit 0;;
+    -*) echo "unknown arg $1"; exit 2;;
+    *) if [ "$REQS" = "200" ]; then REQS="$1"; elif [ "$CONC" = "10" ]; then CONC="$1"; else echo "unknown arg $1"; exit 2; fi; shift;;
+  esac
+done
 ROOT="$(pwd)/examples/vanilla-php"
 CFG="/tmp/phpx-bench.toml"
 BIN="${PHPX_BIN:-./target/debug/phpx}"

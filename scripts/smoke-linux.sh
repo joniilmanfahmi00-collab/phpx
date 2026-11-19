@@ -57,7 +57,7 @@ BODY=$(curl -fsS "http://127.0.0.1:$PORT/hello.php")
 echo "$BODY" | head -3
 if echo "$BODY" | grep -q "<?php"; then echo "FAIL: php source leaked"; exit 1; fi
 echo "[smoke] traversal blocked ..."
-code=$(curl -o /dev/null -s -w "%{http_code}" "http://127.0.0.1:$PORT/%2e%2e/x" || true)
+code=$(curl --path-as-is -o /dev/null -s -w "%{http_code}" "http://127.0.0.1:$PORT/%2e%2e/x" || true)
 if [ "$code" != "400" ]; then echo "FAIL: traversal expected 400 got $code"; exit 1; fi
 echo "[smoke] crash isolation (/crash.php -> 500, then / -> 200) ..."
 code=$(curl -o /dev/null -s -w "%{http_code}" "http://127.0.0.1:$PORT/crash.php" || true)
