@@ -22,7 +22,9 @@ fn main() {
     }
     let target = env::var("TARGET").unwrap_or_default();
     if !target.contains("linux") {
-        warn(&format!("link requested but TARGET={target} is not linux; staying stub"));
+        warn(&format!(
+            "link requested but TARGET={target} is not linux; staying stub"
+        ));
         return;
     }
     let php_config = env::var("PHP_CONFIG").unwrap_or_else(|_| "php-config".to_string());
@@ -37,9 +39,12 @@ fn main() {
         warn(&format!("{php_config} --version failed; staying stub (install php-dev, e.g. sudo apt-get install -y php8.3-dev libphp8.3-embed)"));
         return;
     }
-    let supported = version.starts_with("8.3") || version.starts_with("8.4") || version.starts_with("8.5");
+    let supported =
+        version.starts_with("8.3") || version.starts_with("8.4") || version.starts_with("8.5");
     if !supported {
-        warn(&format!("php-config version {version} not in 8.3/8.4/8.5; staying stub"));
+        warn(&format!(
+            "php-config version {version} not in 8.3/8.4/8.5; staying stub"
+        ));
         return;
     }
     let mut search_dirs: Vec<String> = Vec::new();
@@ -64,11 +69,28 @@ fn main() {
     // so probe for the embed library file and link it explicitly.
     // (M6 finding 2026-11-19: without this the link line has no -lphp at all.)
     let parts: Vec<&str> = version.split(".").collect();
-    let mm = if parts.len() >= 2 { format!("{}.{}", parts[0], parts[1]) } else { version.clone() };
-    let mm_nospace = if parts.len() >= 2 { format!("{}{}", parts[0], parts[1]) } else { version.clone() };
-    let candidates = vec![format!("php{mm}"), format!("php{mm_nospace}"), "php".to_string()];
+    let mm = if parts.len() >= 2 {
+        format!("{}.{}", parts[0], parts[1])
+    } else {
+        version.clone()
+    };
+    let mm_nospace = if parts.len() >= 2 {
+        format!("{}{}", parts[0], parts[1])
+    } else {
+        version.clone()
+    };
+    let candidates = vec![
+        format!("php{mm}"),
+        format!("php{mm_nospace}"),
+        "php".to_string(),
+    ];
     let mut probe_dirs = search_dirs.clone();
-    for d in ["/usr/lib/x86_64-linux-gnu", "/usr/lib", "/lib/x86_64-linux-gnu", "/lib"] {
+    for d in [
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib",
+        "/lib/x86_64-linux-gnu",
+        "/lib",
+    ] {
         if !probe_dirs.contains(&d.to_string()) {
             probe_dirs.push(d.to_string());
         }
@@ -76,7 +98,10 @@ fn main() {
     let mut chosen: Option<String> = None;
     for c in &candidates {
         let f = format!("lib{c}.so");
-        if probe_dirs.iter().any(|d| std::path::Path::new(&format!("{d}/{f}")).exists()) {
+        if probe_dirs
+            .iter()
+            .any(|d| std::path::Path::new(&format!("{d}/{f}")).exists())
+        {
             chosen = Some(c.clone());
             break;
         }

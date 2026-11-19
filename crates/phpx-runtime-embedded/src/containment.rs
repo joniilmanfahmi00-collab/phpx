@@ -87,8 +87,14 @@ mod tests {
         let mut r = phpx_runtime::PhpRequest::minimal("rid-edge", "app", "index.php");
         r.body = vec![0u8; phpx_runtime::MAX_FRAME_BYTES];
         let e = execute_guarded(&d, &r).unwrap_err().to_string();
-        assert!(!e.contains("oversize"), "exact-cap body must not be cap-rejected: {e}");
-        assert!(e.contains("gateway stays up"), "exact-cap body must reach hold: {e}");
+        assert!(
+            !e.contains("oversize"),
+            "exact-cap body must not be cap-rejected: {e}"
+        );
+        assert!(
+            e.contains("gateway stays up"),
+            "exact-cap body must reach hold: {e}"
+        );
     }
 
     #[test]
@@ -97,7 +103,10 @@ mod tests {
         let mut r = phpx_runtime::PhpRequest::minimal("rid-big", "app", "index.php");
         r.body = vec![0u8; phpx_runtime::MAX_FRAME_BYTES + 1];
         let e = execute_guarded(&d, &r).unwrap_err().to_string();
-        assert!(e.contains("MAX_FRAME_BYTES"), "cap rejection must name the cap: {e}");
+        assert!(
+            e.contains("MAX_FRAME_BYTES"),
+            "cap rejection must name the cap: {e}"
+        );
     }
 
     #[test]
@@ -109,7 +118,10 @@ mod tests {
         let mut r = phpx_runtime::PhpRequest::minimal("", "app", "index.php");
         r.request_id.clear();
         let e = execute_guarded(&d, &r).unwrap_err().to_string();
-        assert!(!e.contains("concurrent"), "envelope error must precede domain error: {e}");
+        assert!(
+            !e.contains("concurrent"),
+            "envelope error must precede domain error: {e}"
+        );
     }
 
     #[test]
@@ -118,7 +130,8 @@ mod tests {
         {
             let _g = d.try_enter().expect("enter ok");
         }
-        d.try_enter().expect("re-entry after clean release must succeed");
+        d.try_enter()
+            .expect("re-entry after clean release must succeed");
     }
 
     #[test]
@@ -138,6 +151,9 @@ mod tests {
             Ok(_) => panic!("post-crash entry must fail with poisoned error"),
             Err(e) => e.to_string(),
         };
-        assert!(e.contains("poisoned"), "post-crash entry must report poison, not hang: {e}");
+        assert!(
+            e.contains("poisoned"),
+            "post-crash entry must report poison, not hang: {e}"
+        );
     }
 }

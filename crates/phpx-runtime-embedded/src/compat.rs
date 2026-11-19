@@ -114,9 +114,22 @@ mod tests {
         // No vague deferral: each subset must point at its green process
         // fixture AND its exact embedded blocker.
         for s in subsets() {
-            assert!(!s.process_fixture.is_empty(), "{} must name process fixture", s.id);
-            assert!(!s.embedded_blocker.is_empty(), "{} must name embedded blocker", s.id);
-            assert!(s.embedded_blocker.contains("M6"), "{} blocker must cite the gate: {}", s.id, s.embedded_blocker);
+            assert!(
+                !s.process_fixture.is_empty(),
+                "{} must name process fixture",
+                s.id
+            );
+            assert!(
+                !s.embedded_blocker.is_empty(),
+                "{} must name embedded blocker",
+                s.id
+            );
+            assert!(
+                s.embedded_blocker.contains("M6"),
+                "{} blocker must cite the gate: {}",
+                s.id,
+                s.embedded_blocker
+            );
         }
     }
 
