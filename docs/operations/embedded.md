@@ -130,3 +130,26 @@ linked. Proves the gates hold in linked mode, not only in stub mode:
 - build.rs never fails the build. On missing toolchain, version mismatch, or non-linux TARGET it emits cargo:warning and stays stub.
 - Even when linked=true, available stays false in v0.1 until compat, isolation, and stability gates pass. Docker stays process-runtime-only with embed deferred.
 - OTel stays OTel-ready (traceparent passthrough + JSON logs), not OTLP exporter. cgroup and OS limits stay operator duty (Docker --cpus/--memory, systemd MemoryMax/CPUQuota).
+
+## Opsi-2 compat explicit (2026-11-19, DONE)
+
+No vague deferral: each embedded subset now names its green process fixture
+AND its exact M6 blocker (compat.rs Subset.process_fixture + embedded_blocker).
+
+| Subset | Process fixture (green today) | Embedded blocker (M6 gate) |
+|--------|-------------------------------|----------------------------|
+| vanilla | examples/vanilla-php (m4_compat: isolation + crash-recovery green) | engine entry closed: isolated Zend request lifecycle not wired (M6 isolation gate) |
+| laravel-minimal | examples/laravel-minimal (m4_compat: routing + JSON green) | engine entry closed: framework bootstrap needs persistent opcache + env lifecycle (M6 stability gate) |
+| wordpress-minimal | examples/wordpress-minimal (m4_compat: loop + search + shortcode green) | engine entry closed: WP_SIM global-state lifecycle per request not wired (M6 isolation gate) |
+| woocommerce-minimal | examples/woocommerce-minimal (m4_compat: cart + checkout JSON green) | engine entry closed: after WP baseline; session/cart state lifecycle not wired (M6 isolation gate) |
+
+Link-aware deferral: run_subset_stub keeps substring 'deferred' in both modes
+so contract stays stable. linked=true reports 'engine entry closed until M6
+gates pass', stub reports 'not linked'. Same subset stays green through
+process runtime.
+
+Gate runs 2026-11-19:
+- Windows (ZTS dev box, stub): cargo test -p phpx-runtime-embedded = 28 lib + 12 contract, all green.
+- WSL Debian (php-config 8.3.36 NTS, PHPX_EMBED_LINK=1, libphp linked): cargo test -p phpx-runtime-embedded = 28 lib + 12 contract, all green.
+- WSL process compat: cargo test -p phpx-server --test m4_compat = 5 passed (vanilla, composer, laravel, wp+woo, metrics).
+- runtime inspect (Windows): embedded linked=false, available=false, enabled=false. Honest stub, no overclaim.
