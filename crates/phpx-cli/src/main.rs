@@ -566,7 +566,7 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
                         "active": cfg.runtime.mode,
                         "runtimes": [
                             { "name": "process", "status": if cfg.runtime.mode == "process" { "active" } else { "available" }, "note": "M1 bounded pool, one-shot PHP per request (default)" },
-                            { "name": "embedded", "status": if cfg.runtime.embedded.as_ref().is_some_and(|e| e.enabled) { "experimental-enabled" } else { "experimental-disabled" }, "available": false, "note": "M6.2 ABI pin: php-embed not linked; process fallback active", "abi": phpx_runtime_embedded::abi::AbiPin::pinned() }
+                            { "name": "embedded", "status": if cfg.runtime.embedded.as_ref().is_some_and(|e| e.enabled) { "experimental-enabled" } else { "experimental-disabled" }, "available": false, "linked": phpx_runtime_embedded::is_build_linked(), "note": "M6 ABI pin: php-embed not linked for execution; process fallback active", "abi": phpx_runtime_embedded::abi::AbiPin::pinned() }
                         ],
                         "php_target": cfg.runtime.php_version,
                         "php_actual": actual_php,
@@ -617,7 +617,7 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
                         "docroot": format!("{}/{}", cfg.application.root, cfg.application.document_root),
                         "entrypoint": cfg.application.entrypoint,
                         "tls": cfg.server.tls,
-                        "embedded": { "enabled": cfg.runtime.embedded.as_ref().is_some_and(|e| e.enabled), "available": false, "single_threaded": true, "max_concurrent_entries": 1, "abi": phpx_runtime_embedded::abi::AbiPin::pinned() },
+                        "embedded": { "enabled": cfg.runtime.embedded.as_ref().is_some_and(|e| e.enabled), "available": false, "linked": phpx_runtime_embedded::is_build_linked(), "single_threaded": true, "max_concurrent_entries": 1, "abi": phpx_runtime_embedded::abi::AbiPin::pinned() },
                     })
                 );
             } else {

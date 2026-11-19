@@ -15,6 +15,17 @@ pub mod containment;
 pub mod link;
 pub mod ownership;
 
+/// True when build.rs actually linked libphp (Linux + PHPX_EMBED_LINK=1).
+/// Diagnostics only: availability stays false in v0.1 until M6 gates pass.
+#[cfg(phpx_embed_linked)]
+pub fn is_build_linked() -> bool {
+    true
+}
+#[cfg(not(phpx_embed_linked))]
+pub fn is_build_linked() -> bool {
+    false
+}
+
 /// Capability report for runtime list|inspect and docs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddedCapabilities {
@@ -35,10 +46,15 @@ impl EmbeddedCapabilities {
             max_concurrent_entries: 1,
             nts_only: true,
             note: if enabled {
-                "enabled=true but native php-embed lib not linked in this build (M6.1 stub)"
-                    .to_string()
+                format!(
+                    "enabled=true but php-embed not linked for execution (build_linked={}, M6 experimental stub)",
+                    is_build_linked()
+                )
             } else {
-                "disabled by default; enable with [runtime.embedded] enabled=true + runtime.mode=embedded (experimental)".to_string()
+                format!(
+                    "disabled by default; enable with [runtime.embedded] enabled=true + runtime.mode=embedded (experimental, build_linked={})",
+                    is_build_linked()
+                )
             },
         }
     }
@@ -80,18 +96,20 @@ pub struct EmbeddedGuard<'a> {
 /// Never panics; validates envelope first so contract tests stay meaningful.
 pub fn execute_stub(req: &phpx_runtime::PhpRequest) -> Result<phpx_runtime::PhpResponse> {
     req.validate()?;
-    Err(PhpxError::Runtime(
-        "embedded runtime unavailable in this build: native php-embed not linked (M6 experimental). Use runtime.mode=process or build on Linux with php-embed dev libs".to_string(),
-    ))
+    Err(PhpxError::Runtime(format!(
+        "embedded runtime unavailable in this build: php-embed not linked for execution (build_linked={}, M6 experimental). Use runtime.mode=process or build on Linux with php-embed dev libs",
+        is_build_linked()
+    )))
 }
 
 /// Status line for CLI human output.
 pub fn status_line(enabled: bool) -> String {
     let c = EmbeddedCapabilities::report(enabled);
     format!(
-        "embedded - experimental-{} (available={}, single-threaded, max_entries=1)",
+        "embedded - experimental-{} (available={}, linked={}, single-threaded, max_entries=1)",
         if enabled { "enabled" } else { "disabled" },
-        c.available
+        c.available,
+        is_build_linked()
     )
 }
 

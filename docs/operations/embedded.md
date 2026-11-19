@@ -91,3 +91,25 @@ Single source: phpx-runtime-embedded abi module (AbiPin).
 | Windows x64 | 8.3.30 ZTS dev box | ZTS | rejected by AbiPin, process runtime active |
 | Docker bookworm | php:8.4 NTS CLI | NTS CLI | process runtime only, embed deferred |
 
+## WSL gate verification (M6 gates, 2026-11-19, WSL Debian)
+
+- G1 NTS: php -i shows Thread Safety disabled, Debug Build no, Zend Extension Build API420230831,NTS. PASS (NTS non-debug).
+- G2 toolchain (after sudo apt-get install -y php8.3-dev libphp8.3-embed):
+  - php-config --version => 8.3.36
+  - /usr/include/php/20230831/sapi/embed/php_embed.h present
+  - ldconfig -p | grep libphp => libphp.so => /lib/libphp.so. PASS.
+- G3 contracts: cargo test -p phpx-runtime-embedded => 12 passed, 0 failed on Linux. PASS.
+- G4 CLI:
+  - phpx runtime list => process active (workers=4), embedded experimental-disabled (available=false, linked=false, single-threaded, max_entries=1); php target 8.4 | actual PHP 8.3.36 NTS.
+  - phpx runtime inspect --json => embedded available false, enabled false, single_threaded true, max_concurrent_entries 1, abi sapi embed nts_only true. PASS (honest stub, no overclaim).
+
+## Opt-in native link (experimental, never default)
+
+- Default build stays stub: cargo build -p phpx-runtime-embedded => linked=false, available=false. Windows and ZTS boxes stay green.
+- Linux NTS only:
+  - sudo apt-get install -y php8.3-dev libphp8.3-embed (php8.4: php8.4-dev libphp8.4-embed)
+  - PHPX_EMBED_LINK=1 cargo build -p phpx-runtime-embedded
+  - PHPX_EMBED_LINK=1 cargo test -p phpx-runtime-embedded
+- build.rs never fails the build. On missing toolchain, version mismatch, or non-linux TARGET it emits cargo:warning and stays stub.
+- Even when linked=true, available stays false in v0.1 until compat, isolation, and stability gates pass. Docker stays process-runtime-only with embed deferred.
+- OTel stays OTel-ready (traceparent passthrough + JSON logs), not OTLP exporter. cgroup and OS limits stay operator duty (Docker --cpus/--memory, systemd MemoryMax/CPUQuota).

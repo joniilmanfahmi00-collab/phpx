@@ -30,7 +30,7 @@ impl LinkProbe {
             php_config_version,
             php_version_line,
             tried,
-            how_to_enable: "Linux only: install php-dev with embed SAPI plus NTS non-debug build, pin headers per AbiPin, then wire php-embed libs in build.rs. Windows ZTS dev PHP is rejected by design.".to_string(),
+            how_to_enable: "Linux only: sudo apt-get install -y php8.3-dev libphp8.3-embed (php8.4: php8.4-dev libphp8.4-embed); need NTS non-debug + php-embed headers per AbiPin, then PHPX_EMBED_LINK=1 cargo build -p phpx-runtime-embedded. Windows ZTS dev PHP is rejected by design.".to_string(),
         }
     }
 
@@ -43,6 +43,17 @@ impl LinkProbe {
             }
             Err(e) => format!("missing: {e}"),
         }
+    }
+
+    /// Diagnostics only: true when build.rs linked libphp (Linux + PHPX_EMBED_LINK=1).
+    /// Availability stays false in v0.1 until M6 gates pass.
+    #[cfg(phpx_embed_linked)]
+    pub fn is_build_linked() -> bool {
+        true
+    }
+    #[cfg(not(phpx_embed_linked))]
+    pub fn is_build_linked() -> bool {
+        false
     }
 
     pub fn build_plan() -> String {
