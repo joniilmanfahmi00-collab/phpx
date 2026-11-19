@@ -76,6 +76,23 @@ Single source: phpx-runtime-embedded abi module (AbiPin).
 - Module compat mirrors M4 fixtures: vanilla, laravel-minimal, wordpress-minimal, woocommerce-minimal.
 - run_subset_stub validates subset id plus envelope, then reports deferred. Same subsets stay green through process runtime today.
 
+## Containment and limits (M6 Point 10 DONE + linked-mode gate 2026-11-19)
+
+Gate run (WSL Debian, php-config 8.3.36 NTS, PHPX_EMBED_LINK=1, libphp linked):
+`cargo test -p phpx-runtime-embedded` = 27 lib + 12 contract, all green WITH libphp
+linked. Proves the gates hold in linked mode, not only in stub mode:
+
+- Panic inside the domain poisons the mutex, gateway thread survives, next
+  entry reports graceful `poisoned` error (no hang, no crash).
+- Body exactly 16 MiB passes the size check (no off-by-one); 16 MiB + 1 is
+  rejected naming MAX_FRAME_BYTES.
+- Junk envelope is rejected BEFORE domain entry (single-entry domain cannot
+  be exhausted by malformed frames).
+- Clean guard release allows re-entry (no deadlock).
+- 8-thread race still yields exactly 1 winner under linked build.
+- `execute_guarded` hold message is link-aware: linked=true reports
+  "engine entry closed until M6 gates pass", stub reports "not linked".
+
 ## Containment and limits (M6 Point 10 DONE)
 
 - Module containment, ResourceLimits standard: max_frame_bytes 16 MiB, max_wall_ms 30000, single_entry true.
