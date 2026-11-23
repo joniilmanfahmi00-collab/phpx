@@ -289,7 +289,10 @@ async fn wordpress_rest_api_serves_json() {
         "stock post missing from REST: {}",
         body.chars().take(200).collect::<String>()
     );
-    assert!(body.contains("Hello PHPX"), "test post missing from REST");
+    assert!(
+        body.contains("Hello PHPX Smoke"),
+        "test post missing from REST"
+    );
     let (code, body, _) = get(&client, &base, "/wp-json/wp/v2/search?search=hello").await;
     assert_eq!(code, 200, "REST search must be 200");
     assert!(

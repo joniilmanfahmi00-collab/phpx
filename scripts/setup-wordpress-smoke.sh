@@ -17,8 +17,29 @@ URL="${PHPX_WP_URL:-http://127.0.0.1:18312}"
 WP="${WP_CLI:-wp}"
 export WP_CLI_SUPPRESS_GLOBAL_PARAMS=1
 
+# Fixed canary post asserted by p0d_wordpress (idempotent by title).
+ensure_canary_post() {
+  if ! "$WP" post list --path="$DIR" --post_type=post --fields=post_title --format=csv 2>/dev/null | grep -q "Hello PHPX Smoke"; then
+    "$WP" post create --path="$DIR" --post_type=post --post_title="Hello PHPX Smoke" --post_name=hello-phpx-smoke --post_content="PHPX smoke canary post." --post_status=publish >/dev/null
+  fi
+}
+
+# Application password for authenticated REST tests (media upload, wc/v3).
+# Stored deployment-side; tests read the file, never the DB.
+ensure_app_password() {
+  if [ ! -f "$DIR/.phpx-app-password" ]; then
+    UUID=$("$WP" user application-password list admin --fields=uuid,name --format=csv --path="$DIR" 2>/dev/null | grep ',phpx-smoke$' | cut -d, -f1 || true)
+    if [ -n "$UUID" ]; then
+      "$WP" user application-password delete admin "$UUID" --path="$DIR" >/dev/null 2>&1 || true
+    fi
+    "$WP" user application-password create admin phpx-smoke --porcelain --path="$DIR" > "$DIR/.phpx-app-password" 2>/dev/null || rm -f "$DIR/.phpx-app-password"
+  fi
+}
+
 if [ -f "$DIR/wp-config.php" ] && "$WP" core is-installed --path="$DIR" 2>/dev/null; then
   echo "[wp-smoke] already installed at $DIR ($("$WP" core version --path="$DIR" 2>/dev/null || echo version-unknown))"
+  ensure_app_password
+  ensure_canary_post
   exit 0
 fi
 command -v php >/dev/null || { echo "php not found in PATH"; exit 2; }
@@ -50,13 +71,6 @@ fi
 for opt in comment_moderation comment_whitelist comment_previously_approved; do
   "$WP" option update "$opt" 0 --path="$DIR" >/dev/null 2>&1 || true
 done
-# P1-B integration: application password for authenticated REST tests
-# (media upload). Stored deployment-side; the test reads it, never the DB.
-if [ ! -f "$DIR/.phpx-app-password" ]; then
-  UUID=$("$WP" user application-password list admin --fields=uuid,name --format=csv --path="$DIR" 2>/dev/null | grep ',phpx-smoke$' | cut -d, -f1 || true)
-  if [ -n "$UUID" ]; then
-    "$WP" user application-password delete admin "$UUID" --path="$DIR" >/dev/null 2>&1 || true
-  fi
-  "$WP" user application-password create admin phpx-smoke --porcelain --path="$DIR" > "$DIR/.phpx-app-password" 2>/dev/null || rm -f "$DIR/.phpx-app-password"
-fi
+ensure_app_password
+ensure_canary_post
 echo "[wp-smoke] ready at $DIR ($("$WP" core version --path="$DIR")) url=$URL"

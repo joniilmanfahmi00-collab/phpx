@@ -14,9 +14,40 @@ $Url = if ($env:PHPX_WP_URL) { $env:PHPX_WP_URL } else { 'http://127.0.0.1:18312
 $Wp = if ($env:WP_CLI) { $env:WP_CLI } else { 'wp' }
 $env:WP_CLI_SUPPRESS_GLOBAL_PARAMS = '1'
 
-if ((Test-Path "$Dir/wp-config.php") -and ((& $Wp core is-installed --path="$Dir") 2>$null; $LASTEXITCODE -eq 0)) {
+function Test-WpInstalled {
+  if (-not (Test-Path "$Dir/wp-config.php")) { return $false }
+  & $Wp core is-installed --path="$Dir" 2>$null | Out-Null
+  return ($LASTEXITCODE -eq 0)
+}
+
+function Ensure-CanaryPost {
+  # Fixed canary post asserted by p0d_wordpress (idempotent by title).
+  $titles = (& $Wp post list --path="$Dir" --post_type=post --fields=post_title --format=csv) 2>$null
+  $has = $titles | Where-Object { $_ -match 'Hello PHPX Smoke' }
+  if (-not $has) {
+    & $Wp post create --path="$Dir" --post_type=post --post_title='Hello PHPX Smoke' --post_name=hello-phpx-smoke --post_content='PHPX smoke canary post.' --post_status=publish | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'canary post creation failed' }
+  }
+}
+
+function Ensure-AppPassword {
+  # Application password for authenticated REST tests (media upload, wc/v3).
+  # Stored deployment-side; tests read the file, never the DB.
+  if (-not (Test-Path "$Dir/.phpx-app-password")) {
+    $rows = (& $Wp user application-password list admin --fields=uuid,name --format=csv --path="$Dir") 2>$null
+    $uuid = $rows | Where-Object { $_ -match ',phpx-smoke$' } | ForEach-Object { ($_ -split ',')[0] } | Select-Object -First 1
+    if ($uuid) { & $Wp user application-password delete admin $uuid --path="$Dir" >$null 2>&1 }
+    & $Wp user application-password create admin phpx-smoke --porcelain --path="$Dir" 2>$null | Set-Content "$Dir/.phpx-app-password"
+    $f = Get-Item "$Dir/.phpx-app-password" -ErrorAction SilentlyContinue
+    if (($null -eq $f) -or ($f.Length -eq 0)) { Remove-Item "$Dir/.phpx-app-password" -Force -ErrorAction SilentlyContinue }
+  }
+}
+
+if (Test-WpInstalled) {
   $ver = (& $Wp core version --path="$Dir") 2>$null
   Write-Host "[wp-smoke] already installed at $Dir ($ver)"
+  Ensure-AppPassword
+  Ensure-CanaryPost
   exit 0
 }
 if (-not (Get-Command php -ErrorAction SilentlyContinue)) { Write-Error 'php not found in PATH'; exit 2 }
@@ -33,8 +64,7 @@ if (-not (Test-Path "$Dir/wp-config.php")) {
   if ($LASTEXITCODE -ne 0) { exit 1 }
   & $Wp config set WP_ENVIRONMENT_TYPE local --path="$Dir" 2>$null
 }
-(& $Wp core is-installed --path="$Dir") 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
+if (-not (Test-WpInstalled)) {
   & $Wp core install --path="$Dir" --url="$Url" --title='PHPX Smoke' --admin_user=admin --admin_password=admin --admin_email=smoke@phpx.test --skip-email
   if ($LASTEXITCODE -ne 0) { exit 1 }
 }
@@ -45,13 +75,7 @@ if ($LASTEXITCODE -ne 0) { & $Wp rewrite structure '/%postname%/' --path="$Dir" 
 foreach ($opt in @('comment_moderation', 'comment_whitelist', 'comment_previously_approved')) {
   & $Wp option update $opt 0 --path="$Dir" >$null 2>&1
 }
-# P1-B integration: application password for authenticated REST tests
-# (media upload). Stored deployment-side; the test reads it, never the DB.
-if (-not (Test-Path "$Dir/.phpx-app-password")) {
-  $uuid = (& $Wp user application-password list admin --fields=uuid,name --format=csv --path="$Dir" 2>$null | Where-Object { $_ -match ',phpx-smoke$' } | ForEach-Object { ($_ -split ',')[0] } | Select-Object -First 1)
-  if ($uuid) { & $Wp user application-password delete admin $uuid --path="$Dir" >$null 2>&1 }
-  & $Wp user application-password create admin phpx-smoke --porcelain --path="$Dir" 2>$null | Set-Content "$Dir/.phpx-app-password"
-  if (-not (Test-Path "$Dir/.phpx-app-password") -or ((Get-Item "$Dir/.phpx-app-password").Length -eq 0)) { Remove-Item "$Dir/.phpx-app-password" -Force -ErrorAction SilentlyContinue }
-}
+Ensure-AppPassword
+Ensure-CanaryPost
 $ver = (& $Wp core version --path="$Dir") 2>$null
 Write-Host "[wp-smoke] ready at $Dir ($ver) url=$Url"
