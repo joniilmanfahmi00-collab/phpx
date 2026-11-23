@@ -37,7 +37,7 @@ fi
 if [ ! -f "$DIR/wp-config.php" ]; then
   "$WP" config create --path="$DIR" --dbname="$DBNAME" --dbuser="$DBUSER" \
     --dbpass="$DBPASS" --dbhost="$DBHOST:$DBPORT" --skip-check --force
-  "$WP" config set WP_ENVIRONMENT_TYPE local --path="$DIR" --raw 2>/dev/null || true
+  "$WP" config set WP_ENVIRONMENT_TYPE local --path="$DIR" 2>/dev/null || true
 fi
 if ! "$WP" core is-installed --path="$DIR" 2>/dev/null; then
   "$WP" core install --path="$DIR" --url="$URL" --title="PHPX Smoke" \

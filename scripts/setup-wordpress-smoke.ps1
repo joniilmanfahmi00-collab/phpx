@@ -31,7 +31,7 @@ if (-not (Test-Path "$Dir/wp-includes/version.php")) {
 if (-not (Test-Path "$Dir/wp-config.php")) {
   & $Wp config create --path="$Dir" --dbname="$DbName" --dbuser="$DbUser" --dbpass="$DbPass" --dbhost="$DbHost`:$DbPort" --skip-check --force
   if ($LASTEXITCODE -ne 0) { exit 1 }
-  & $Wp config set WP_ENVIRONMENT_TYPE local --path="$Dir" --raw 2>$null
+  & $Wp config set WP_ENVIRONMENT_TYPE local --path="$Dir" 2>$null
 }
 (& $Wp core is-installed --path="$Dir") 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
