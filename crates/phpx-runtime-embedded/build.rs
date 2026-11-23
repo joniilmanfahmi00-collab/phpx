@@ -3,9 +3,10 @@
 //! Never fails the build. Links libphp only when BOTH hold:
 //!   - TARGET contains linux, AND
 //!   - env PHPX_EMBED_LINK=1.
-//! Otherwise stays stub so Windows/ZTS dev boxes stay green.
-//! When linked, emits cfg(phpx_embed_linked) for diagnostics;
-//! availability stays false in v0.1 until compat/isolation/stability gates pass.
+//!
+//! Otherwise stays stub so Windows/ZTS dev boxes stay green. When linked,
+//! emits cfg(phpx_embed_linked) for diagnostics; availability stays false
+//! in v0.1 until compat/isolation/stability gates pass.
 use std::env;
 use std::process::Command;
 fn warn(msg: &str) {
