@@ -1,14 +1,20 @@
 # PHPX RC soak-long - Windows (NOT SLA): default 60 menit, sample RSS tiap 60 detik.
-# Cara pakai: .\scripts\soak-long-windows.ps1 [-Minutes 60] [-Concurrency 8] [-Port 18081]
-param([int]$Minutes=60,[int]$Concurrency=8,[int]$Port=18081)
+# Cara pakai: .\scripts\soak-long-windows.ps1 [-Minutes 60] [-Concurrency 8] [-Port 18081] [-Mode one-shot|persistent] [-Profile debug|release] [-OutDir data/bench/<auto>]
+param([int]$Minutes=60,[int]$Concurrency=8,[int]$Port=18081,[string]$Mode="one-shot",[string]$Profile="debug",[string]$OutDir="")
 $ErrorActionPreference="Stop"
+if ($Mode -ne "one-shot" -and $Mode -ne "persistent") { throw "Mode must be one-shot or persistent" }
+if ($Profile -ne "debug" -and $Profile -ne "release") { throw "Profile must be debug or release" }
 $RepoRoot=Split-Path $PSScriptRoot -Parent
-$Bin=Join-Path $RepoRoot "target\debug\phpx.exe"
+if ($OutDir -eq "") { $OutDir = $env:TEMP }
+if (-not [IO.Path]::IsPathRooted($OutDir)) { $OutDir = Join-Path $RepoRoot $OutDir }
+New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+if ($Profile -eq "release") { $Bin=Join-Path $RepoRoot "target\release\phpx.exe" } else { $Bin=Join-Path $RepoRoot "target\debug\phpx.exe" }
 $RootFs=(Join-Path $RepoRoot "examples\vanilla-php").Replace("\","/")
-$Cfg=Join-Path $env:TEMP "phpx-soaklong.toml"
-$Log=Join-Path $env:TEMP "phpx-soaklong.log"
-$Csv=Join-Path $env:TEMP "phpx-soaklong-rss.csv"
-cargo build -p phpx-cli -q
+$Cfg=Join-Path $OutDir "phpx-soaklong.toml"
+$Log=Join-Path $OutDir "phpx-soaklong.log"
+$Csv=Join-Path $OutDir "phpx-soaklong-rss.csv"
+if ($Profile -eq "release") { cargo build --release -p phpx-cli -q } else { cargo build -p phpx-cli -q }
+if ($LASTEXITCODE -ne 0) { throw "cargo build gagal" }
 @"
 schema_version = 1
 [server]
@@ -23,11 +29,21 @@ entrypoint = "index.php"
 mode = "process"
 php_version = "8.4"
 [runtime.process]
+execution_mode = "$Mode"
 workers = 4
+min_workers = 1
 max_requests = 500
 request_timeout_seconds = 10
 startup_timeout_seconds = 10
 memory_limit = "256M"
+memory_soft_limit = "0"
+memory_hard_limit = "0"
+memory_sample_interval_seconds = 5
+queue_wait_timeout_seconds = 2
+shutdown_drain_timeout_seconds = 10
+restart_max_retries = 5
+restart_backoff_ms = 250
+restart_backoff_max_ms = 30000
 [runtime.embedded]
 enabled = false
 "@ | Set-Content -Path $Cfg -Encoding utf8
@@ -43,8 +59,8 @@ try {
     ("{0},{1:N0}" -f ([DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")),$rss) | Add-Content -Path $Csv -Encoding utf8
     Start-Sleep -Seconds 50
   }
-  try { curl.exe -fsS "http://127.0.0.1:$Port/metrics" | Set-Content -Path "$env:TEMP\phpx-soaklong.out.metrics" -Encoding utf8 } catch {}
-  Write-Host "[soak-long] csv=$Csv log=$Log"
+  try { curl.exe -fsS "http://127.0.0.1:$Port/metrics" | Set-Content -Path (Join-Path $OutDir "phpx-soaklong.out.metrics") -Encoding utf8 } catch {}
+  Write-Host "[soak-long] out=$OutDir mode=$Mode profile=$Profile"
   Get-Content $Csv | Select-Object -Last 3
   Write-Host "[soak-long] slope=(rss_akhir-rss_awal)/menit, gateway harus flat."
 } finally { if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } }

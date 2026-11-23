@@ -1,50 +1,83 @@
-# PHPX operational limitations (M3+M5 v0.1 developer preview)
+# PHPX operational limitations (v0.1 developer preview)
 
-**v0.1 is a developer preview, not a production SLA.** Do not use for production traffic without M4 hardening + your own review.
+**v0.1 is a developer preview, not a production SLA.** Do not use for
+production traffic. The list below is current as of the P1-B state: what the
+code actually does, what it explicitly does not do, and where the operator is
+responsible.
 
-## What M3 does
+## What v0.1 does
 
-- Serves vanilla PHP via Process Runtime (one-shot PHP per request, bounded pool).
+- Serves PHP via Process Runtime in two explicit modes (`runtime.process.execution_mode`):
+  `one-shot` (fresh `php` per request) and `persistent` (fixed-size supervised
+  workers with handshake, per-worker state, restart budgets). Reported by
+  CLI/JSON and `phpx_execution_mode_info`.
 - Safe static serving (traversal blocked, symlink escape -> 403, `.php` never served raw).
-- Backpressure: overload -> `503 + Retry-After: 1`, never unbounded queue.
-- Crash isolation: PHP exit != 0 -> `500`, gateway stays up.
-- Graceful drain on Ctrl-C / SIGINT (`systemd stop`), bounded by `request_timeout_seconds`.
-- Health: `GET /healthz` (liveness), `GET /readyz` (readiness).
-- Structured access logs with `request_id` + `x-request-id` header.
+- Backpressure: overload / crash-loop circuit / draining -> `503 + Retry-After: 1`,
+  never an unbounded queue. Queue bounds + wait timeouts enforced and metered.
+- Crash isolation: PHP exit != 0 -> `500`, timeout -> `504`, gateway stays up;
+  supervised workers restart with a new incarnation (reason recorded).
+- Resource guardian (persistent mode): OS-RSS soft limit -> graceful recycle,
+  hard limit -> protective termination; per-worker RSS/peak/uptime/startup/
+  shutdown/health/recovery metrics. Sampling-based: overshoot between samples
+  is possible; RSS != PHP heap.
+- PHP heap limit: `memory_limit` is passed as `-d memory_limit=...`
+  (Zend heap only, both modes) — not an OS RSS cap.
+- Graceful drain on Ctrl-C / SIGTERM / `pool.drain()`, bounded by the drain timeout.
+- Health: `GET /healthz` (liveness), `GET /readyz` (readiness); Prometheus `/metrics`.
+- Structured access logs with `request_id` + `x-request-id` header; sensitive
+  headers redacted (`[redacted]`).
 - TLS via Rustls when `tls=true` + PEM cert/key; plain HTTP for local/tests.
-- HTTP/1.1 only. HTTP/2 deferred (gated by integration tests, not claimed).
+- HTTP/1.1 only. HTTP/2 deferred.
+- Queue + scheduler + cache + storage are real (`queue.md`, `scheduler.md`,
+  `cache.md`, `storage.md`). PHPX Redis driver deferred; app-native Redis via
+  `REDIS_HOST` works directly from PHP without a PHPX driver.
+- Benchmark laboratory (`scripts/bench-lab.sh/.ps1`): throughput, latency
+  distribution, cold vs warm, gateway RSS trend — developer-machine numbers,
+  never an SLA.
+- Real-application smoke: Laravel 12 + WordPress 7.1 boot and serve through
+  PHPX (see `compatibility-matrix.md`). Simulations remain for the fixture set.
 
-## What M3 does NOT do
+## What v0.1 does NOT do
 
-- Prometheus `/metrics` landed in M4. See `phpx metrics`.
-- Live pool counters landed in M4 (`/metrics`, `workers status` snapshot).
-- No live reload without restart. `phpx workers reload` validates config; apply via `restart phpx serve` / `systemctl restart phpx`. SIGHUP zero-downtime reload is M4.
-- Queue + scheduler + cache + storage are real since M5 (see `queue.md` + `scheduler.md` + `cache.md` + `storage.md`): `queue status|push|work` exit 0, `scheduler run` dispatch-only exit 0, `cache status|get|set|clear` exit 0, `storage status|put|get|list` exit 0 (s3 transport prototype deferred). PHPX Redis driver deferred; app-native Redis via WordPress/Laravel REDIS_HOST tetap jalan langsung dari PHP tanpa PHPX driver.
-- Embedded runtime is M6 full stub (M6.1 plus M6.2 ABI pin plus link probe, narrow bridge, ownership rules, NTS matrix, compat subsets, containment): `runtime.mode=embedded` needs `[runtime.embedded] enabled=true`; capabilities report available=false, single-entry domain, process stays default. Native linking deferred (see embedded.md).
-- No multi-tenancy isolation claim. PHP extensions + app code are trusted executable code in v0.1 (SPEC 10).
+- No live reload. `phpx workers reload` validates config; apply by restarting
+  the gateway (`systemctl restart phpx`). SIGHUP zero-downtime reload is not supported.
+- PHP-set response status/headers are NOT propagated under CLI SAPI:
+  `header()` / `http_response_code()` are no-ops, so framework 404 pages arrive
+  as HTTP 200 with the rendered body, and `?p=N`-style canonical redirects
+  (WordPress pretty permalinks on) arrive as empty 200s. Crash -> 500 and
+  timeout -> 504 are gateway-mapped and unaffected. See `sapi-audit.md`.
+- Sessions (`$_SESSION` persistence), `$_FILES`/multipart parsing, and
+  `php://input` under CLI are not emulated (multipart bodies arrive raw on
+  stdin). No session/upload/file-write integration tests on real apps yet.
+- Persistent workers reuse the PHP process: `$GLOBALS`/statics set by app code
+  persist across requests (pinned by test). Use one-shot when strict isolation
+  is required. Function redefinition on re-include fatals the worker (restarted,
+  counted as crash).
+- Embedded runtime stays an experimental stub (`available=false`, process default).
+- No multi-tenancy isolation claim. PHP extensions + app code are trusted
+  executable code (SPEC 10).
 - No WAF, CDN, or full reverse-proxy parity (SPEC 6.2 deferred).
-- Soak runbook landed in M4 (`soak.md` + `scripts/soak.sh`); memory guardian incremental per ADR-0014 Phase B.
-- Framework fixtures (Composer/Laravel/WordPress/WooCommerce) landed in M4; M3 only claimed vanilla.
+- S3 storage transport is a prototype; Redis queue/cache drivers deferred.
+- cgroup CPU/memory auto-detection: none. The gateway stays bounded and
+  observable; enforcement is operator + orchestrator responsibility
+  (Docker `--cpus/--memory`, systemd `MemoryMax=`/`CPUQuota=`).
+- OTel: gateway is OTel-ready (`request_id` + W3C `traceparent` passthrough +
+  JSON logs), no OTLP exporter (keeps release auditable).
+- No encrypted-at-rest (SQLite file perms + disk encryption are operator
+  responsibility); upgrades are stateless restart + snapshot restore
+  (`upgrade-rollback.md`, `backup-recovery.md`).
 
-## Security boundaries (M3)
+## Security boundaries
 
 - Run as non-root where feasible (Docker `USER phpx`, systemd `User=phpx`, `NoNewPrivileges=true`).
 - Bound request bodies (`request_body_limit`), bounded workers (`1-1024`), bounded queue.
-- Never expose secrets in logs/diagnostics. Sensitive headers are redacted in logs (values not printed); full header values are only passed to PHP env, not log lines.
-- Validate static paths against traversal + symlink escape. No `..`, `\`, NUL, `%2e/%2f/%5c/%00` pre-FS (400), canonical + `starts_with` docroot check, escape -> 403.
-- OS/CPU/memory cgroup limits for production are your responsibility in M3 (see systemd.md).
+- Never expose secrets in logs/diagnostics. Sensitive headers are redacted in logs
+  (values not printed); full header values are only passed to PHP env, not log lines.
+- Validate static paths against traversal + symlink escape. No `..`, `\`, NUL,
+  `%2e/%2f/%5c/%00` pre-FS (400), canonical + `starts_with` docroot check, escape -> 403.
 
 ## When to adopt
 
 - Local dev, CI smoke, Docker evaluation, vanilla PHP prototyping: yes.
-- Production, PII, payments, multi-tenant hosting: no, wait for M4+ and your security review.
-
-## M7 RC delta (production candidate, still not a blanket SLA)
-
-- Threat model published (`security.md`); secrets never logged (`redacted_header_value` + `m7_security` soak).
-- Saturation bounded by construction (`workers` + `queue_bound` + `queue_wait` -> 503 + `Retry-After: 1`); proven by `m7_resilience` (8 slow sleepers on 2 workers stay 200/503/504, `/metrics` observable, fast endpoint recovers).
-- cgroup/CPU/RAM enforcement is operator + orchestrator responsibility (Docker `--cpus/--memory`, systemd `MemoryMax/CPUQuota`); gateway does not auto-detect cgroup quotas in v0.1.
-- OTel: gateway is OTel-ready (`request_id` + W3C `traceparent` passthrough + JSON logs), no OTLP exporter in v0.1 (keeps release auditable). Use `/metrics` + logs for now.
-- Upgrades are stateless restart + SQLite snapshot restore (`upgrade-rollback.md`, `backup-recovery.md`). No encrypted-at-rest (file perms + disk encryption are operator responsibility).
-- Docker runs non-root `phpx:10001` + `HEALTHCHECK` (verified by test); harden at runtime with `--read-only --cap-drop ALL` + `data/` volume.
-- SBOM via `scripts/sbom.sh` (syft SPDX preferred, cargo-tree fallback). Release via `scripts/release.sh` + `packaging/README.md`.
+- Production, PII, payments, multi-tenant hosting: no — Beta/RC gates
+  (see `release-gates.md`) are not met yet.

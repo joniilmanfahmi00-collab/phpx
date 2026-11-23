@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 phpx-core.workspace = true
 phpx-config.workspace = true
+phpx-runtime.workspace = true
 phpx-server.workspace = true
 phpx-queue.workspace = true
 phpx-scheduler.workspace = true

@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
-# PHPX M4 soak: fixed-pool baseline, RSS trend + /metrics report (adaptive disabled).
-# Usage: ./scripts/soak.sh [--port 18081] [--requests 2000] [--concurrency 8]
+# PHPX M4+P1-A soak: fixed-pool baseline, RSS trend + /metrics report (adaptive disabled).
+# Usage: ./scripts/soak.sh [--port 18081] [--requests 2000] [--concurrency 8] [--execution-mode one-shot|persistent]
 set -euo pipefail
 PORT=18081
 REQUESTS=2000
 CONC=8
+MODE="one-shot"
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; shift 2;;
     --requests) REQUESTS="$2"; shift 2;;
     --concurrency) CONC="$2"; shift 2;;
+    --execution-mode) MODE="$2"; shift 2;;
     *) echo "unknown arg $1"; exit 2;;
   esac
 done
+case "$MODE" in
+  one-shot|persistent) ;;
+  *) echo "execution-mode must be one-shot or persistent, got $MODE"; exit 2;;
+esac
 ROOT="$(pwd)/examples/vanilla-php"
 CFG="/tmp/phpx-soak.toml"
 BIN="${PHPX_BIN:-./target/debug/phpx}"
@@ -37,6 +43,7 @@ entrypoint = "index.php"
 mode = "process"
 php_version = "8.4"
 [runtime.process]
+execution_mode = "$MODE"
 workers = 4
 min_workers = 1
 max_requests = 500
@@ -75,7 +82,7 @@ METRICS="$(curl -sf "http://127.0.0.1:$PORT/metrics" || echo METRICS_FAILED)"
 echo "$METRICS" > "$OUT.metrics"
 echo "$METRICS" | grep -E "^phpx_pool_" || true
 
-echo "--- soak report (M4 fixed-pool baseline, adaptive disabled) ---"
+echo "--- soak report (fixed-pool baseline, mode=$MODE, adaptive disabled) ---"
 echo "requests=$REQUESTS concurrency=$CONC duration_s=$DUR rps=$((REQUESTS / DUR))"
 if command -v ps >/dev/null 2>&1; then
   RSS=$(ps -o rss= -p "$SRV" 2>/dev/null | tr -d " " || echo unknown)

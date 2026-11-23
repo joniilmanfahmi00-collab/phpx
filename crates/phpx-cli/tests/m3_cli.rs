@@ -35,12 +35,55 @@ fn runtime_and_workers_status() {
     let (code, out, _) = run(&["runtime", "list"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("process"), "{out}");
+    assert!(out.contains("execution_mode"), "{out}");
+    let (code, out, _) = run(&["--json", "runtime", "list"]);
+    assert_eq!(code, 0, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).expect("runtime list json");
+    assert_eq!(
+        v.get("execution_mode").and_then(|m| m.as_str()),
+        Some("one-shot"),
+        "{out}"
+    );
     let (code, out, _) = run(&["runtime", "inspect"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("mode:"), "{out}");
+    assert!(out.contains("execution_mode"), "{out}");
+    let (code, out, _) = run(&["--json", "runtime", "inspect"]);
+    assert_eq!(code, 0, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).expect("runtime inspect json");
+    assert_eq!(
+        v.get("execution_mode").and_then(|m| m.as_str()),
+        Some("one-shot"),
+        "{out}"
+    );
     let (code, out, _) = run(&["workers", "status"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("bounded pool"), "{out}");
+    assert!(out.contains("execution_mode=one-shot"), "{out}");
+    let (code, out, _) = run(&["--json", "workers", "status"]);
+    assert_eq!(code, 0, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).expect("workers status json");
+    assert_eq!(
+        v.get("execution_mode").and_then(|m| m.as_str()),
+        Some("one-shot"),
+        "{out}"
+    );
+    assert_eq!(
+        v.get("memory_soft_limit").and_then(|m| m.as_str()),
+        Some("0"),
+        "{out}"
+    );
+    assert_eq!(
+        v.get("memory_hard_limit").and_then(|m| m.as_str()),
+        Some("0"),
+        "{out}"
+    );
+    assert_eq!(
+        v.get("memory_sample_interval_seconds")
+            .and_then(|m| m.as_u64()),
+        Some(5),
+        "{out}"
+    );
     let (code, out, _) = run(&["workers", "reload"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("valid"), "{out}");

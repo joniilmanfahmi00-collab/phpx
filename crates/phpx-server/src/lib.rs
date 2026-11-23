@@ -5,8 +5,8 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder as ConnBuilder;
 use phpx_config::PhpxConfig;
 use phpx_core::{PhpxError, Result};
-use phpx_runtime::PhpRequest;
-use phpx_worker::{BoundedPool, PoolConfig};
+use phpx_runtime::{PhpRequest, PhpResponse};
+use phpx_worker::{BoundedPool, PersistentPool, PersistentPoolConfig, PoolConfig};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Component, PathBuf};
@@ -14,17 +14,83 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 
-/// Shared gateway state (M2 gateway, M4 hardening).
+/// Shared gateway state (M2 gateway, M4 hardening, P0-B supervised pool).
 /// Lifecycle note (SPEC 5.1 + ADR-0014): one-shot pool has no persistent
-/// Busy incarnations. Failed = terminal for that request attempt with
-/// diagnostic reason + restart-budget accounting; Stopped = drained pool
-/// no longer accepting work. Crash recovery = next request gets a fresh
-/// process; graceful reload = restart process (stateless gateway).
+/// Busy incarnations; persistent pool supervises fixed workers with
+/// Starting -> Ready -> Busy -> Ready plus drain/restart/Failed paths.
+/// Failed = terminal for that worker with a diagnostic reason + no further
+/// auto-retry; Stopped = drained pool no longer accepting work.
+/// Execution pool selected by `runtime.process.execution_mode` (P0-A explicit,
+/// P0-B implemented): one-shot throttle or fixed-size supervised workers.
+#[derive(Debug, Clone, Copy)]
+pub struct PoolLoad {
+    pub active: usize,
+    pub waiting: usize,
+}
+
+#[allow(clippy::large_enum_variant)]
+pub enum ExecPool {
+    OneShot(BoundedPool),
+    // Boxed: the supervised pool owns fixed worker slots + sampler state,
+    // far larger than the one-shot throttle (which stays inline: it is the
+    // default hot path and boxing it would add a pointless indirection).
+    Persistent(Box<PersistentPool>),
+}
+
+impl ExecPool {
+    pub fn execution_mode(&self) -> &'static str {
+        match self {
+            ExecPool::OneShot(_) => phpx_runtime::EXECUTION_MODE_ONE_SHOT,
+            ExecPool::Persistent(p) => p.execution_mode(),
+        }
+    }
+
+    pub fn execute(&self, req: &PhpRequest) -> Result<PhpResponse> {
+        match self {
+            ExecPool::OneShot(p) => p.execute(req),
+            ExecPool::Persistent(p) => p.execute(req),
+        }
+    }
+
+    pub fn prometheus_text(&self) -> String {
+        match self {
+            ExecPool::OneShot(p) => p.prometheus_text(),
+            ExecPool::Persistent(p) => p.prometheus_text(),
+        }
+    }
+
+    pub fn begin_drain(&self) {
+        match self {
+            ExecPool::OneShot(p) => p.begin_drain(),
+            ExecPool::Persistent(p) => p.begin_drain(),
+        }
+    }
+
+    /// Load snapshot for access-log dimensions (active/waiting only).
+    pub fn load_snapshot(&self) -> PoolLoad {
+        let (active, waiting) = match self {
+            ExecPool::OneShot(p) => {
+                let s = p.snapshot();
+                (s.active, s.waiting)
+            }
+            ExecPool::Persistent(p) => p.load(),
+        };
+        PoolLoad { active, waiting }
+    }
+
+    pub fn drain(&self, timeout: Duration) -> bool {
+        match self {
+            ExecPool::OneShot(p) => p.drain(timeout),
+            ExecPool::Persistent(p) => p.drain(timeout),
+        }
+    }
+}
+
 pub struct AppState {
     pub docroot: PathBuf,
     pub docroot_canonical: PathBuf,
     pub entrypoint: String,
-    pub pool: BoundedPool,
+    pub pool: ExecPool,
     pub body_limit: u64,
     pub php_bin: String,
     pub drain_timeout: Duration,
@@ -180,6 +246,18 @@ fn content_type_for(path: &std::path::Path) -> &'static str {
     }
 }
 
+/// Normalize the configured PHP heap limit: "0"/empty = php default,
+/// anything else is passed through as `-d memory_limit=...` (validated
+/// as a parseable size at config load).
+fn memory_limit_opt(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    if t.is_empty() || t == "0" {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
 pub fn build_state(cfg: &PhpxConfig) -> Result<Arc<AppState>> {
     let app_root_raw = std::path::Path::new(&cfg.application.root);
     let app_root_abs = if app_root_raw.is_absolute() {
@@ -217,22 +295,57 @@ pub fn build_state(cfg: &PhpxConfig) -> Result<Arc<AppState>> {
     let proc = cfg.runtime.process.clone().unwrap_or_default();
     let timeout_s = proc.request_timeout_seconds.max(1);
     let php_bin = std::env::var("PHPX_PHP_BIN").unwrap_or_else(|_| "php".to_string());
-    let pool = BoundedPool::new(PoolConfig {
-        max_workers: proc.workers,
-        min_workers: proc.min_workers,
-        queue_bound: proc.effective_queue_bound(),
-        queue_wait_timeout: Duration::from_secs(proc.queue_wait_timeout_seconds),
-        execution_timeout: Duration::from_secs(timeout_s),
-        drain_timeout: Duration::from_secs(proc.shutdown_drain_timeout_seconds.max(1)),
-        max_requests_per_slot: proc.max_requests.max(1),
-        restart_max_retries: proc.restart_max_retries,
-        restart_backoff_base: Duration::from_millis(proc.restart_backoff_ms.max(10)),
-        restart_backoff_max: Duration::from_millis(
-            proc.restart_backoff_max_ms
-                .max(proc.restart_backoff_ms.max(10)),
-        ),
-        php_bin: php_bin.clone(),
+    let mode = phpx_runtime::ExecutionMode::parse(&proc.execution_mode).ok_or_else(|| {
+        PhpxError::Config(format!(
+            "runtime.process.execution_mode must be one-shot or persistent, got {}",
+            proc.execution_mode
+        ))
     })?;
+    let pool = match mode {
+        phpx_runtime::ExecutionMode::OneShot => ExecPool::OneShot(BoundedPool::new(PoolConfig {
+            max_workers: proc.workers,
+            min_workers: proc.min_workers,
+            execution_mode: proc.execution_mode.clone(),
+            queue_bound: proc.effective_queue_bound(),
+            queue_wait_timeout: Duration::from_secs(proc.queue_wait_timeout_seconds),
+            execution_timeout: Duration::from_secs(timeout_s),
+            drain_timeout: Duration::from_secs(proc.shutdown_drain_timeout_seconds.max(1)),
+            max_requests_per_slot: proc.max_requests.max(1),
+            restart_max_retries: proc.restart_max_retries,
+            restart_backoff_base: Duration::from_millis(proc.restart_backoff_ms.max(10)),
+            restart_backoff_max: Duration::from_millis(
+                proc.restart_backoff_max_ms
+                    .max(proc.restart_backoff_ms.max(10)),
+            ),
+            php_bin: php_bin.clone(),
+            php_memory_limit: memory_limit_opt(&proc.memory_limit),
+        })?),
+        phpx_runtime::ExecutionMode::Persistent => {
+            ExecPool::Persistent(Box::new(PersistentPool::new(PersistentPoolConfig {
+                worker_count: proc.workers,
+                php_bin: php_bin.clone(),
+                script_path: None,
+                php_memory_limit: memory_limit_opt(&proc.memory_limit),
+                startup_timeout: Duration::from_secs(proc.startup_timeout_seconds.max(1)),
+                execution_timeout: Duration::from_secs(timeout_s),
+                queue_bound: proc.effective_queue_bound(),
+                queue_wait_timeout: Duration::from_secs(proc.queue_wait_timeout_seconds),
+                drain_timeout: Duration::from_secs(proc.shutdown_drain_timeout_seconds.max(1)),
+                max_requests_per_worker: proc.max_requests.max(1),
+                restart_max_retries: proc.restart_max_retries,
+                restart_backoff_base: Duration::from_millis(proc.restart_backoff_ms.max(10)),
+                restart_backoff_max: Duration::from_millis(
+                    proc.restart_backoff_max_ms
+                        .max(proc.restart_backoff_ms.max(10)),
+                ),
+                memory_soft_bytes: phpx_config::parse_size(&proc.memory_soft_limit).unwrap_or(0),
+                memory_hard_bytes: phpx_config::parse_size(&proc.memory_hard_limit).unwrap_or(0),
+                memory_sample_interval: Duration::from_secs(
+                    proc.memory_sample_interval_seconds.max(1),
+                ),
+            })?))
+        }
+    };
     let drain_timeout = Duration::from_secs(proc.shutdown_drain_timeout_seconds.max(1));
     Ok(Arc::new(AppState {
         docroot,
@@ -324,7 +437,7 @@ async fn handle_one(state: Arc<AppState>, req: Request<Incoming>) -> Response<Bo
     }
     if uri_path == "/metrics" {
         let elapsed = started.elapsed().as_millis() as u64;
-        let snap = state.pool.snapshot();
+        let snap = state.pool.load_snapshot();
         let mut body = state.pool.prometheus_text();
         body.push_str(&format!(
             "# HELP phpx_build_info Build info.\n# TYPE phpx_build_info gauge\nphpx_build_info{{version=\"{}\"}} 1\n",
@@ -499,8 +612,6 @@ async fn dispatch_php(state: Arc<AppState>, d: Dispatch<'_>) -> Response<BoxBody
     preq.headers = d.headers;
     preq.body = d.body;
     let rid = d.request_id.to_string();
-    let pool = state.pool.stats();
-    let _ = pool;
     // Blocking PHP work must not run on Tokio executor threads (ADR-0006).
     let state2 = state.clone();
     let join = tokio::task::spawn_blocking(move || state2.pool.execute(&preq)).await;
@@ -699,17 +810,35 @@ async fn shutdown_signal() {
 pub async fn spawn_test_server(
     cfg: PhpxConfig,
 ) -> Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
+    spawn_test_server_on(cfg, 0).await
+}
+
+/// Test helper with a fixed port (e.g. WordPress, whose install URL must
+/// match the gateway address for canonical redirects). Port 0 = ephemeral.
+pub async fn spawn_test_server_on(
+    cfg: PhpxConfig,
+    port: u16,
+) -> Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
     let state = build_state(&cfg)?;
-    let listener = TcpListener::bind("127.0.0.1:0")
+    let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
         .await
         .map_err(|e| PhpxError::Config(format!("test bind failed: {e}")))?;
     let addr = listener
         .local_addr()
         .map_err(|e| PhpxError::Config(format!("local_addr failed: {e}")))?;
     let handle = tokio::spawn(async move {
-        while let Ok((stream, _)) = listener.accept().await {
-            let s = state.clone();
-            tokio::spawn(async move { serve_conn(stream, s).await });
+        // NOTE: never `while let Ok(...)`: a single transient accept error
+        // (common on Windows under rapid connect/close churn, e.g. WP
+        // wp-cron self-hits) must not kill the listener. Production serve()
+        // logs-and-continues; the test helper does the same.
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    let s = state.clone();
+                    tokio::spawn(async move { serve_conn(stream, s).await });
+                }
+                Err(_) => continue,
+            }
         }
     });
     Ok((addr, handle))

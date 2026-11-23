@@ -348,7 +348,7 @@ fn cmd_serve(
                 "preview": "v0.1-developer-preview",
                 "config": loaded.path.display().to_string(),
                 "server": { "host": loaded.cfg.server.host, "port": loaded.cfg.server.port, "tls": loaded.cfg.server.tls },
-                "runtime": { "mode": loaded.cfg.runtime.mode, "php_version": loaded.cfg.runtime.php_version },
+                "runtime": { "mode": loaded.cfg.runtime.mode, "php_version": loaded.cfg.runtime.php_version, "execution_mode": loaded.cfg.runtime.process.as_ref().map(|p| p.execution_mode.clone()).unwrap_or_else(|| "one-shot".to_string()), "protocol_version": phpx_runtime::PROTOCOL_VERSION },
                 "health": { "liveness": "/healthz", "readiness": "/readyz" },
             })
         );
@@ -604,6 +604,12 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
     };
     let cfg = loaded.cfg;
     let workers = cfg.runtime.process.as_ref().map(|p| p.workers).unwrap_or(4);
+    let execution_mode = cfg
+        .runtime
+        .process
+        .as_ref()
+        .map(|p| p.execution_mode.clone())
+        .unwrap_or_else(|| "one-shot".to_string());
     let actual_php = php_first_line().unwrap_or_else(|| "php not found in PATH".to_string());
     match cmd {
         RuntimeCmd::List => {
@@ -612,8 +618,10 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
                     "{}",
                     serde_json::json!({
                         "active": cfg.runtime.mode,
+                        "execution_mode": execution_mode,
+                        "protocol_version": phpx_runtime::PROTOCOL_VERSION,
                         "runtimes": [
-                            { "name": "process", "status": if cfg.runtime.mode == "process" { "active" } else { "available" }, "note": "M1 bounded pool, one-shot PHP per request (default)" },
+                            { "name": "process", "status": if cfg.runtime.mode == "process" { "active" } else { "available" }, "note": "bounded pool (P0-B: one-shot or persistent supervised workers)" },
                             { "name": "embedded", "status": if cfg.runtime.embedded.as_ref().is_some_and(|e| e.enabled) { "experimental-enabled" } else { "experimental-disabled" }, "available": false, "linked": phpx_runtime_embedded::is_build_linked(), "note": "M6 ABI pin: php-embed not linked for execution; process fallback active", "abi": phpx_runtime_embedded::abi::AbiPin::pinned() }
                         ],
                         "php_target": cfg.runtime.php_version,
@@ -622,6 +630,7 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
                 );
             } else {
                 println!("runtimes (config: {}):", loaded.path.display());
+                println!("  execution_mode: {execution_mode} (one-shot: one fresh php per request; persistent: fixed-size supervised workers)");
                 println!(
                     "  * process  - {} (default, M1 bounded pool, workers={})",
                     if cfg.runtime.mode == "process" {
@@ -651,6 +660,8 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
                     "{}",
                     serde_json::json!({
                         "mode": cfg.runtime.mode,
+                        "execution_mode": p.map(|x| x.execution_mode.clone()).unwrap_or_else(|| "one-shot".to_string()),
+                        "protocol_version": phpx_runtime::PROTOCOL_VERSION,
                         "php_target": cfg.runtime.php_version,
                         "php_actual": actual_php,
                         "workers": p.map(|x| x.workers).unwrap_or(4),
@@ -670,7 +681,13 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
                 );
             } else {
                 println!("runtime inspect ({}):", loaded.path.display());
-                println!("  mode: {}", cfg.runtime.mode);
+                println!(
+                    "  mode: {} | execution_mode: {} (protocol v{})",
+                    cfg.runtime.mode,
+                    p.map(|x| x.execution_mode.clone())
+                        .unwrap_or_else(|| "one-shot".to_string()),
+                    phpx_runtime::PROTOCOL_VERSION
+                );
                 println!(
                     "  php target: {} | actual: {}",
                     cfg.runtime.php_version, actual_php
@@ -684,7 +701,7 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
                     p.map(|x| x.shutdown_drain_timeout_seconds).unwrap_or(10),
                 );
                 println!(
-                    "  request_timeout={}s startup_timeout={}s memory_limit={} restarts={} backoff={}ms/{}ms recycle_every={}",
+                    "  request_timeout={}s startup_timeout={}s memory_limit={} (advisory, unenforced in one-shot) restarts={} backoff={}ms/{}ms recycle_every={}",
                     p.map(|x| x.request_timeout_seconds).unwrap_or(30),
                     p.map(|x| x.startup_timeout_seconds).unwrap_or(10),
                     p.map(|x| x.memory_limit.clone())
@@ -726,6 +743,7 @@ fn cmd_workers(config_arg: Option<PathBuf>, as_json: bool, cmd: WorkersCmd) -> i
     let proc = cfg.runtime.process.clone().unwrap_or_default();
     let workers = proc.workers;
     let min_workers = proc.min_workers;
+    let execution_mode = proc.execution_mode.clone();
     let queue_bound = proc.effective_queue_bound();
     let timeout_s = proc.request_timeout_seconds;
     match cmd {
@@ -735,6 +753,8 @@ fn cmd_workers(config_arg: Option<PathBuf>, as_json: bool, cmd: WorkersCmd) -> i
                     "{}",
                     serde_json::json!({
                         "pool": "bounded",
+                        "execution_mode": execution_mode,
+                        "protocol_version": phpx_runtime::PROTOCOL_VERSION,
                         "min_workers": min_workers,
                         "max_workers": workers,
                         "queue_bound": queue_bound,
@@ -745,6 +765,10 @@ fn cmd_workers(config_arg: Option<PathBuf>, as_json: bool, cmd: WorkersCmd) -> i
                         "restart_backoff_ms": proc.restart_backoff_ms,
                         "restart_backoff_max_ms": proc.restart_backoff_max_ms,
                         "max_requests_per_slot": proc.max_requests,
+                        "php_memory_limit": proc.memory_limit,
+                        "memory_soft_limit": proc.memory_soft_limit,
+                        "memory_hard_limit": proc.memory_hard_limit,
+                        "memory_sample_interval_seconds": proc.memory_sample_interval_seconds,
                         "metrics": "GET /metrics (Prometheus text: completed/failed/timeouts/rejected/recycled/restarts/circuit/active/waiting)",
                         "lifecycle": "Failed = terminal attempt with diagnostics + restart-budget; Stopped = drained pool, no new work (SPEC 5.1 + ADR-0014)",
                         "note": "M4 hardened: crash-loop circuit breaker fast-503s; drain rejects with 503 + Retry-After: 1; overload maps to HTTP 503 + Retry-After: 1"
@@ -752,8 +776,9 @@ fn cmd_workers(config_arg: Option<PathBuf>, as_json: bool, cmd: WorkersCmd) -> i
                 );
             } else {
                 println!(
-                    "workers ({}): bounded pool min={} max={} queue_bound={}",
+                    "workers ({}): bounded pool execution_mode={} min={} max={} queue_bound={}",
                     loaded.path.display(),
+                    execution_mode,
                     min_workers,
                     workers,
                     queue_bound
@@ -767,6 +792,13 @@ fn cmd_workers(config_arg: Option<PathBuf>, as_json: bool, cmd: WorkersCmd) -> i
                     proc.restart_backoff_ms,
                     proc.restart_backoff_max_ms,
                     proc.max_requests,
+                );
+                println!(
+                    "  memory: php_heap_limit={} (PHP `-d memory_limit`, heap only) | guardian soft={} hard={} sample_every={}s (OS RSS; persistent mode only)",
+                    proc.memory_limit,
+                    proc.memory_soft_limit,
+                    proc.memory_hard_limit,
+                    proc.memory_sample_interval_seconds,
                 );
                 println!("  overload/circuit/draining -> HTTP 503 + Retry-After: 1 (never unbounded, SPEC 5.3)");
                 println!("  lifecycle: Failed = terminal attempt + diagnostics; Stopped = drained, no new work");
@@ -1643,7 +1675,7 @@ fn cmd_metrics(config_arg: Option<PathBuf>, as_json: bool) -> i32 {
             "  - tip: RUST_LOG=info phpx serve  # access logs to stdout; use --json for JSON logs"
         );
         println!("  - live: curl http://127.0.0.1:8080/metrics  # needs `phpx serve` running");
-        println!("  - keys: phpx_pool_completed/failed/timeouts/rejected_overload/recycled/restarts/circuit_breaks/active/waiting");
+        println!("  - keys: phpx_execution_mode_info + phpx_pool_completed/failed/timeouts/rejected_overload/recycled/restarts/circuit_breaks/active/waiting");
     }
     0
 }

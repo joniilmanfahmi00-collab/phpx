@@ -68,12 +68,16 @@ pub struct RuntimeConfig {
 
 /// M4: min/max pool, bounded queue, timeouts, drain, restart policy.
 /// All new fields have serde defaults so M1-M3 configs keep parsing.
+/// P0-A: `execution_mode` is explicit. Only `"one-shot"` is runnable;
+/// `"persistent"` is rejected at validation until the P0-B supervised pool exists.
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct RuntimeProcessConfig {
     #[serde(default = "default_workers")]
     pub workers: u32,
     #[serde(default = "default_min_workers")]
     pub min_workers: u32,
+    #[serde(default = "default_execution_mode")]
+    pub execution_mode: String,
     #[serde(default = "default_max_requests")]
     pub max_requests: u64,
     #[serde(default = "default_timeout")]
@@ -82,6 +86,15 @@ pub struct RuntimeProcessConfig {
     pub startup_timeout_seconds: u64,
     #[serde(default = "default_memory_limit")]
     pub memory_limit: String,
+    /// P0-C guardian: OS-RSS soft limit ("0" = disabled). At/over -> graceful recycle.
+    #[serde(default = "default_memory_disabled")]
+    pub memory_soft_limit: String,
+    /// P0-C guardian: OS-RSS hard limit ("0" = disabled). At/over -> protective termination.
+    #[serde(default = "default_memory_disabled")]
+    pub memory_hard_limit: String,
+    /// P0-C guardian: idle-worker sampling period, 1-60s.
+    #[serde(default = "default_memory_sample_interval")]
+    pub memory_sample_interval_seconds: u64,
     /// None = auto (workers*4, min 16). Some(n) = explicit bound 1-100000.
     #[serde(default)]
     pub queue_bound: Option<usize>,
@@ -214,6 +227,9 @@ fn default_workers() -> u32 {
 fn default_min_workers() -> u32 {
     1
 }
+fn default_execution_mode() -> String {
+    phpx_runtime::EXECUTION_MODE_ONE_SHOT.to_string()
+}
 fn default_max_requests() -> u64 {
     1000
 }
@@ -225,6 +241,12 @@ fn default_startup_timeout() -> u64 {
 }
 fn default_memory_limit() -> String {
     "256M".to_string()
+}
+fn default_memory_disabled() -> String {
+    "0".to_string()
+}
+fn default_memory_sample_interval() -> u64 {
+    5
 }
 fn default_queue_wait() -> u64 {
     2
@@ -335,6 +357,10 @@ impl Default for RuntimeProcessConfig {
         Self {
             workers: default_workers(),
             min_workers: default_min_workers(),
+            execution_mode: default_execution_mode(),
+            memory_soft_limit: default_memory_disabled(),
+            memory_hard_limit: default_memory_disabled(),
+            memory_sample_interval_seconds: default_memory_sample_interval(),
             max_requests: default_max_requests(),
             request_timeout_seconds: default_timeout(),
             startup_timeout_seconds: default_startup_timeout(),
@@ -426,6 +452,19 @@ impl PhpxConfig {
             }
         }
         if let Some(p) = &self.runtime.process {
+            match phpx_runtime::ExecutionMode::parse(&p.execution_mode) {
+                Some(phpx_runtime::ExecutionMode::OneShot) => {}
+                Some(phpx_runtime::ExecutionMode::Persistent) => {
+                    // P0-B: persistent supervised pool implemented; selected
+                    // explicitly by the operator (fixed-size, handshake-gated).
+                }
+                None => {
+                    return Err(PhpxError::Config(format!(
+                        "runtime.process.execution_mode must be one-shot or persistent, got {}",
+                        p.execution_mode
+                    )));
+                }
+            }
             if p.workers == 0 || p.workers > 1024 {
                 return Err(PhpxError::Config(
                     "runtime.process.workers must be 1-1024 (bounded, no unbounded pool)"
@@ -491,6 +530,19 @@ impl PhpxConfig {
                 ));
             }
             parse_size(&p.memory_limit)?;
+            let soft = parse_size(&p.memory_soft_limit)?;
+            let hard = parse_size(&p.memory_hard_limit)?;
+            if soft > 0 && hard > 0 && soft >= hard {
+                return Err(PhpxError::Config(format!(
+                    "runtime.process.memory_soft_limit ({}) must be below memory_hard_limit ({}) (soft=recycle, hard=terminate)",
+                    p.memory_soft_limit, p.memory_hard_limit
+                )));
+            }
+            if p.memory_sample_interval_seconds == 0 || p.memory_sample_interval_seconds > 60 {
+                return Err(PhpxError::Config(
+                    "runtime.process.memory_sample_interval_seconds must be 1-60".to_string(),
+                ));
+            }
         }
         if let Some(queue) = &self.queue {
             let d = queue.driver.to_ascii_lowercase();
@@ -643,6 +695,49 @@ mod tests {
         let cfg = PhpxConfig::parse_str(EXAMPLE).expect("example must parse");
         assert_eq!(cfg.schema_version, 1);
         assert_eq!(cfg.server.port, 8080);
+    }
+
+    #[test]
+    fn execution_mode_defaults_to_one_shot_and_accepts_persistent() {
+        let cfg = PhpxConfig::parse_str(EXAMPLE).expect("example parses");
+        let p = cfg.runtime.process.as_ref().expect("example has process");
+        assert_eq!(p.execution_mode, "one-shot");
+        // P0-C guardian defaults: disabled (limits "0"), 5s idle sampling.
+        assert_eq!(p.memory_soft_limit, "0");
+        assert_eq!(p.memory_hard_limit, "0");
+        assert_eq!(p.memory_sample_interval_seconds, 5);
+        // P0-B: persistent is now a selectable, implemented mode.
+        let mut persistent = cfg.clone();
+        persistent.runtime.process.as_mut().unwrap().execution_mode = "persistent".to_string();
+        persistent.validate().expect("persistent must validate");
+        let mut bad = cfg.clone();
+        bad.runtime.process.as_mut().unwrap().execution_mode = "bogus".to_string();
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn memory_guardian_limits_validate() {
+        let base = PhpxConfig::parse_str(EXAMPLE).expect("example parses");
+        // Disabled by default: both zero parses fine.
+        assert!(base.validate().is_ok());
+        let with = |soft: &str, hard: &str, interval: u64| {
+            let mut cfg = base.clone();
+            let p = cfg.runtime.process.as_mut().unwrap();
+            p.memory_soft_limit = soft.to_string();
+            p.memory_hard_limit = hard.to_string();
+            p.memory_sample_interval_seconds = interval;
+            cfg.validate().is_ok()
+        };
+        // Soft >= hard is rejected.
+        assert!(!with("1G", "1G", 5));
+        assert!(!with("1G", "512M", 5));
+        // Soft < hard validates; hard-only (soft disabled) validates.
+        assert!(with("256M", "512M", 5));
+        assert!(with("0", "512M", 5));
+        // Bad size strings rejected; interval bounds enforced.
+        assert!(!with("bogus", "512M", 5));
+        assert!(!with("256M", "512M", 0));
+        assert!(!with("256M", "512M", 61));
     }
 
     #[test]

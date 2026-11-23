@@ -1,9 +1,23 @@
-# PHPX compatibility matrix (M4)
+# PHPX compatibility matrix (M4 + P0-D)
 
-Developer preview v0.1. Scope: Process Runtime (one-shot `php <entry>` per request).
+Developer preview v0.1. Scope: Process Runtime one-shot `php <entry>` per request
++ P0-D real-application smoke (Laravel 12, gateway one-shot).
 `Failed` = terminal for that request attempt with diagnostic reason + restart-budget
 accounting; `Stopped` = drained pool, no new work (SPEC 5.1 + ADR-0014 alignment).
 Crash recovery = next request gets a fresh process; no cross-request state by construction.
+The server under test is always PHPX itself (`phpx serve` / `spawn_test_server`).
+Apache/nginx/php-fpm/Laragon/WP Studio are never the server under test.
+
+## Real applications (P0-D, served via `phpx serve` — never Apache)
+
+| App (upstream, unmodified source) | Provisioning | Evidence | Scope + limits |
+|---|---|---|---|
+| Laravel 12 (`laravel/laravel:^12.0`, sqlite, migrated) | `scripts/setup-laravel-smoke.sh` / `.ps1`, or auto by test (needs `composer`); override dir with `PHPX_LARAVEL_DIR` | `p0d_laravel` (5/5): welcome + no-failure-markers; 404 body; JSON 405 (`Accept: application/json`); sessions persist server-side (sqlite rows +1/request); multipart POST rejected gracefully as 405 (no crash, 837KB debug page streams fine) | Smoke + integration (routing, error JSON, sessions, multipart grace). PHP-set status NOT propagated (404/405 arrive as 200). Set-Cookie swallowed by CLI SAPI (session id not observable on wire) |
+| WordPress 7.1 (`wordpress.org/latest.zip`, wp-cli install, MySQL 8.4) + WooCommerce 11.3 (real upstream plugin; scripted product `Smoke Pixel` 25) | `scripts/mysql-smoke.sh start` + `scripts/setup-wordpress-smoke.sh` (`.ps1` on Windows; CI: mariadb service + wp-cli); override dir with `PHPX_WORDPRESS_DIR`; install URL must be `http://127.0.0.1:18312` (fixed test gateway port, `PHPX_WP_URL`); app password in `.phpx-app-password` (deployment artifact, gitignored) | `p0d_wordpress` (13/13: WP front/search/pretty/login/REST/comments/media above, plus shop loop + product pretty URL + add-to-cart/cart/checkout redirect-swallow docs + `wc/v3/products` catalog JSON with app-password auth, unauth `woocommerce_rest_cannot_view`) | Smoke + integration (routing, query, JSON, form POST, cookies-in, auth, DB writes). PHP-set status/Location NOT propagated; `?p=N`, `?add-to-cart`, empty-checkout hits redirect-swallow (empty/front 200s). Upload *bytes* blocked: `php://input`/`$_FILES` unavailable under CLI SAPI (pinned as JSON error codes). `$_POST` urlencoded + `PHP_AUTH_*`/`HTTP_AUTHORIZATION` + `REMOTE_ADDR`/`SERVER_NAME`/`SERVER_PORT` now emulated (see sapi-audit.md) |
+
+Verified 2026-11-22: Laravel Framework 12.73.0 (PHP 8.3.30, Windows dev) +
+WordPress 7.1.5 (PHP 8.3.30 + MySQL 8.4.3, Windows dev).
+Record the local versions after each run; the tests accept any 12.x / 7.x.
 
 ## Fixtures (all served via `phpx serve`, no app source changes)
 
@@ -54,3 +68,9 @@ Full matrix runbook: `php -m` on target host vs app requirements; record gaps he
 | `m7_resilience` (saturation bounded + metrics observable + recovery, config gates) | PASS (2/2) |
 | `m4_compat` (vanilla/composer/laravel/wp/woo + /metrics) | PASS (process green; embedded deferred) |
 | `m3_cli` (`doctor/metrics/queue/scheduler/cache/storage`) | PASS (6/6) |
+| `p0d_laravel` (real Laravel 12: welcome, 404, JSON 405, sessions, multipart) | PASS (5/5) |
+| `p0d_wordpress` (real WordPress 7.1 + WooCommerce 11.3: front, search, pretty, login, REST, comments, media auth, shop, product, cart/checkout docs, wc/v3; needs provisioned install + MySQL) | PASS (13/13), SKIP loudly when unprovisioned |
+| `p1a_resilience` (idle crash, circuit, in-flight drain x2, app-exit resync, reload, leak doc, recovery timeline, short soak) | PASS (9/9) |
+| `p0b_persistent` + `persistent` (supervised pool, state machine, guardian) | PASS (3+14) |
+
+See `docs/operations/resilience.md` for the failure-injection matrix and recovery-timeline semantics.

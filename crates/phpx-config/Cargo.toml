@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 phpx-core.workspace = true
+phpx-runtime.workspace = true
 phpx-scheduler.workspace = true
 serde.workspace = true
 toml.workspace = true

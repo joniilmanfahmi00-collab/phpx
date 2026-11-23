@@ -1,4 +1,4 @@
-# PHP SAPI compatibility audit (M4)
+# PHP SAPI compatibility audit (M4 + P0-D)
 
 ## What the gateway actually does
 
@@ -8,8 +8,14 @@
   `PHPX_QUERY`, `PHPX_HEADERS_JSON`, `PHPX_PROTOCOL`. Body is piped on stdin.
 - `src/bootstrap.php` (embedded, materialized to temp) emulates CGI-like state:
   `$_GET` (from `PHPX_QUERY`), `$_COOKIE` (from `Cookie` header),
-  `$_SERVER["REQUEST_METHOD"/"REQUEST_URI"/"QUERY_STRING"/"HTTP_*"/"CONTENT_*"]`,
-  `getallheaders()` polyfill, and `phpx_input()` body helper.
+  `$_POST` for `application/x-www-form-urlencoded` bodies (parsed from stdin),
+  `$_SERVER["REQUEST_METHOD"/"REQUEST_URI"/"QUERY_STRING"/"HTTP_*"/"CONTENT_*"/"PHP_AUTH_*"/"REMOTE_ADDR"]`,
+  `HTTP_AUTHORIZATION` passthrough, `getallheaders()` polyfill, and
+  `phpx_input()` body helper.
+- PHP-level heap limit: `-d memory_limit=<limit>` from `runtime.process.memory_limit`
+  (P0-C, real enforcement; heap only, not OS RSS).
+- Stdout/stderr are drained concurrently (P0-D fix): responses larger than the
+  OS pipe buffer (~64KB, e.g. Laravel welcome ~80KB) no longer deadlock.
 
 ## Supported
 
@@ -24,12 +30,38 @@
   status pages, `fastcgi_*` functions, or `.user.ini` FPM semantics.
 - `php://input`: empty under CLI. Workaround (documented, used by fixtures):
   `function_exists("phpx_input") ? phpx_input() : file_get_contents("php://input")`.
-- `$_FILES` / multipart parsing, `$_SESSION` persistence, `getenv("FCGI_*")`:
-  not emulated in M4. Multipart bodies arrive raw on stdin; frameworks that
-  need `$_FILES` require M5+ SAPI work.
+- Apps that terminate the process (`exit`/`die`, e.g. WordPress `wp_redirect`
+  and REST serving paths) kill a persistent worker: the supervisor maps it to
+  500 + restart with a new incarnation and resyncs the stream
+  (pinned by `p1a: app_exit_kills_worker_and_pool_resyncs`). One-shot captures
+  the flushed output as the response body instead. Prefer one-shot for apps
+  that exit per request.
+  This blocks REST/file-upload request *bodies* (e.g. WP media `rest_upload_no_data`).
+- `$_FILES` / multipart parsing: not emulated. Multipart bodies arrive raw on
+  stdin and route handling still works (Laravel multipart POST -> graceful 405),
+  but uploaded files are never materialized; frameworks that need `$_FILES`
+  require future SAPI work.
+- `$_SESSION` persistence: not emulated (no session file/cookie round-trip
+  through the gateway). Apps that store sessions server-side (Laravel database
+  driver) still persist rows and can be asserted DB-side; the session *cookie*
+  itself is swallowed with all other `Set-Cookie` output.
+- `$_SERVER["REMOTE_ADDR"]` defaults to `127.0.0.1`; `["SERVER_NAME"]`/`["SERVER_PORT"]`
+  derive from the `Host` header (IPv6-aware); `HTTP_AUTHORIZATION` is passed
+  through and `Authorization: Basic` maps to `PHP_AUTH_USER`/`PHP_AUTH_PW`
+  (CGI parity; Bearer/other schemes untouched). The true client IP is not
+  forwarded — document before trusting any of these for auth/rate-limit decisions.
 - Long-lived resources (DB pools, OPcache) do not persist across requests
   (one-shot). This is the isolation tradeoff: safe by default, bootstrap cost
   per request.
+- PHP-set response status/headers are NOT propagated under CLI (P0-D finding):
+  `header()` and `http_response_code()` are no-ops in `cli` SAPI, so the
+  gateway returns 200 with the framework's rendered body. Examples: Laravel's
+  404 page arrives as HTTP 200 containing "Not Found"
+  (pinned by `p0d_laravel::laravel_unknown_route_reports_not_found_body`);
+  with WP pretty permalinks, `?p=N` shortlink answers become empty-200 bodies
+  because `redirect_canonical()` emits `Location` + `exit` and the header is
+  dropped. Crash (non-zero exit) -> 500, timeout -> 504 are gateway-mapped
+  and unaffected.
 
 ## How to audit a new host
 

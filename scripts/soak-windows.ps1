@@ -1,12 +1,14 @@
-# PHPX M4 soak - Windows native (padanan scripts/soak.sh).
-# Cara pakai: .\scripts\soak-windows.ps1 [-Port 18081] [-Requests 2000] [-Concurrency 8]
+# PHPX M4+P1-A soak - Windows native (padanan scripts/soak.sh).
+# Cara pakai: .\scripts\soak-windows.ps1 [-Port 18081] [-Requests 2000] [-Concurrency 8] [-Mode one-shot|persistent]
 param(
   [int]$Port = 18081,
   [int]$Requests = 2000,
   [int]$Concurrency = 8,
+  [string]$Mode = "one-shot",
   [string]$Bin = $(if ($env:PHPX_BIN) { $env:PHPX_BIN } else { "" })
 )
 $ErrorActionPreference = "Stop"
+if ($Mode -ne "one-shot" -and $Mode -ne "persistent") { throw "Mode must be one-shot or persistent, got $Mode" }
 
 $RepoRoot = Split-Path $PSScriptRoot -Parent
 if (-not $Bin -or $Bin -eq "") { $Bin = Join-Path $RepoRoot "target\debug\phpx.exe" }
@@ -34,6 +36,7 @@ entrypoint = "index.php"
 mode = "process"
 php_version = "8.4"
 [runtime.process]
+execution_mode = "$Mode"
 workers = 4
 min_workers = 1
 max_requests = 500

@@ -49,11 +49,15 @@ request_timeout_seconds = 30
 | `runtime.mode` | `"process"` | Only `process` active; `embedded` is experimental opt-in since M6.1 (stub) |
 | `runtime.php_version` | `"8.4"` | Target for `doctor`/`runtime list`; actual from `php --version` |
 | `runtime.process.workers` | `4` | Max pool size, bounded `1-1024`, never unbounded. Overload/circuit/drain -> `503 + Retry-After: 1` |
+| `runtime.process.execution_mode` | `"one-shot"` | P0-A explicit, P0-B implemented. `"one-shot"` = fresh `php` per request; `"persistent"` = fixed-size supervised workers (handshake-gated, per-worker state/metrics). Reported by CLI/JSON + `phpx_execution_mode_info` |
 | `runtime.process.min_workers` | `1` | Min pool size, `1-1024`, must be `<= workers`. Ready-capacity floor for future adaptive (M4: validated, pool honors max) |
 | `runtime.process.max_requests` | `1000` | Logical recycle budget per slot (`>=1`); one-shot already isolates per request; counts toward `recycled` in `/metrics` |
 | `runtime.process.request_timeout_seconds` | `30` | Bounds PHP execution + graceful drain |
 | `runtime.process.startup_timeout_seconds` | `10` | Reserved for supervised workers (M4) |
-| `runtime.process.memory_limit` | `"256M"` | Advisory in M4; full soft/hard RSS guardian per ADR-0014 is incremental (overshoot allowed, sampling-based) |
+| `runtime.process.memory_limit` | `"256M"` | P0-C: real PHP heap limit, passed as `-d memory_limit=...` to every PHP child (one-shot + persistent). Bounds the Zend heap ONLY, not OS RSS. `"0"`/empty = php default |
+| `runtime.process.memory_soft_limit` | `"0"` | P0-C guardian (persistent only): OS-RSS soft limit, `"0"` = disabled. At/over -> graceful recycle (replacement first, staggered). Must be below hard when both set |
+| `runtime.process.memory_hard_limit` | `"0"` | P0-C guardian (persistent only): OS-RSS hard limit, `"0"` = disabled. At/over -> protective termination + respawn with diagnostic reason |
+| `runtime.process.memory_sample_interval_seconds` | `5` | `1-60`. Idle-worker RSS sampling period. Request completion is an additional sampling point |
 | `runtime.process.queue_bound` | auto (`workers*4`, min 16) | Explicit `1-100000` overrides auto. Waiting beyond bound -> `503` (never unbounded) |
 | `runtime.process.queue_wait_timeout_seconds` | `2` | `0-120`. Wait for a worker slot before `503` |
 | `runtime.process.shutdown_drain_timeout_seconds` | `10` | `1-120`. SIGTERM/Ctrl-C drain budget; pool stops intake (`draining` -> `503`), waits for in-flight |
@@ -101,6 +105,13 @@ request_timeout_seconds = 30
 - `application.root` / `entrypoint` must be non-empty; docroot must exist and entry file must exist at startup.
 - `runtime.mode` must be `process` or `embedded`; `embedded` without `[runtime.embedded] enabled=true` is rejected.
 - `workers` must be `1-1024`, `min_workers <= workers`, bounds per key (see table).
+- `runtime.process.execution_mode` must be `one-shot` or `persistent` (P0-B: both runnable; persistent = fixed-size supervised pool).
+- Enforcement points (P0-C): `memory_limit` = PHP heap (`-d`, Zend only, both modes);
+  `memory_soft_limit`/`memory_hard_limit` = OS RSS supervisor policy (persistent
+  workers only); soft must be < hard when both set; `memory_sample_interval_seconds` 1-60.
+  RSS != PHP heap: allocator behavior, native extensions, shared libraries and
+  fragmentation affect observed RSS; sampling overshoot between sample points is
+  possible and does not imply a leak (or prove its absence).
 - `queue.driver` must be `memory` or `sqlite`; `workers` 1-16; sqlite requires `database`.
 - `scheduler.poll_interval_secs` 1-3600; max 100 schedules; ids unique.
   Each schedule validated via `ScheduleDef::new` (cron, timezone, payload,

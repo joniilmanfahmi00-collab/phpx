@@ -33,6 +33,26 @@ mode = "process"
 php_version = "8.4"
 
 [runtime.process]
+# Execution mode (P0-A explicit, P0-B implemented). "one-shot" (default):
+# one fresh `php` process per request (isolation by construction).
+# "persistent": fixed-size supervised workers (handshake-gated, per-worker
+# state/metrics). Both report via CLI/JSON + metrics.
+execution_mode = "one-shot"
+# PHP heap limit (P0-C: real enforcement). Passed as `-d memory_limit=...`
+# to every PHP child (one-shot and persistent). Bounds the Zend heap ONLY,
+# not OS RSS. "0"/empty = leave the php default. Must parse via parse_size.
+memory_limit = "256M"
+# Resource guardian (P0-C, persistent mode only). OS-RSS soft/hard policy
+# with separate enforcement points from the PHP heap limit above:
+#  - memory_soft_limit: at/over -> graceful recycle (replacement first).
+#  - memory_hard_limit: at/over -> protective termination + respawn.
+# "0" = disabled (default). When both set, soft must be below hard.
+# Sampling points: request completion + idle sweep every
+# memory_sample_interval_seconds (1-60, default 5). Overshoot between
+# samples is possible; RSS != PHP heap (see docs/operations/configuration.md).
+memory_soft_limit = "0"
+memory_hard_limit = "0"
+memory_sample_interval_seconds = 5
 # Bounded pool (M4 hardened): min/max, never unbounded (SPEC 5.3).
 # Overload / crash-loop circuit / draining -> HTTP 503 + Retry-After: 1.
 workers = 4
@@ -44,8 +64,6 @@ max_requests = 1000
 request_timeout_seconds = 30
 # Startup timeout (reserved for supervised workers).
 startup_timeout_seconds = 10
-# Simplified memory limit (advisory in M4; full soft/hard guardian per ADR-0014 is incremental).
-memory_limit = "256M"
 # Bounded queue: None = auto (workers*4, min 16). Explicit 1-100000 overrides.
 # queue_bound = 16
 # How long a request waits for a worker slot before 503. Default 2s.

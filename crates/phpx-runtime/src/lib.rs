@@ -8,6 +8,59 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// Max framed message: 16 MiB (matches default request_body_limit).
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
+/// Explicit execution-mode identifiers.
+/// - `one-shot`: one fresh `php` process per request (M1, implemented).
+/// - `persistent`: long-lived supervised PHP workers (P0-B, implemented as
+///   `PersistentPool`: fixed-size pool, handshake-gated, per-worker identity).
+pub const EXECUTION_MODE_ONE_SHOT: &str = "one-shot";
+pub const EXECUTION_MODE_PERSISTENT: &str = "persistent";
+
+/// Selected execution mode. Both variants are runnable; the gateway selects
+/// the pool (`BoundedPool` vs `PersistentPool`) from configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionMode {
+    OneShot,
+    Persistent,
+}
+
+impl ExecutionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExecutionMode::OneShot => EXECUTION_MODE_ONE_SHOT,
+            ExecutionMode::Persistent => EXECUTION_MODE_PERSISTENT,
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "one-shot" | "oneshot" => Some(ExecutionMode::OneShot),
+            "persistent" => Some(ExecutionMode::Persistent),
+            _ => None,
+        }
+    }
+}
+
+/// P0-A: persistent-worker identity contract (P0-B will populate it).
+/// `worker_id` is stable across restarts of the same slot; `incarnation`
+/// changes every time the OS process is (re)spawned; `pid` is the live
+/// process handle while the worker is supervised.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct WorkerIdentity {
+    pub worker_id: u64,
+    pub incarnation: u64,
+    pub pid: Option<u32>,
+}
+
+impl WorkerIdentity {
+    pub fn new(worker_id: u64, incarnation: u64, pid: Option<u32>) -> Self {
+        Self {
+            worker_id,
+            incarnation,
+            pid,
+        }
+    }
+}
+
 /// Versioned request envelope (SPEC 3.3, M1 prototype).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhpRequest {
@@ -171,6 +224,20 @@ mod tests {
         let mut cursor = Cursor::new(bytes);
         let back: PhpRequest = decode_frame(&mut cursor).unwrap();
         assert_eq!(back.request_id, "req-123");
+    }
+
+    #[test]
+    fn execution_mode_parses_explicitly() {
+        assert_eq!(
+            ExecutionMode::parse("one-shot"),
+            Some(ExecutionMode::OneShot)
+        );
+        assert_eq!(
+            ExecutionMode::parse("persistent"),
+            Some(ExecutionMode::Persistent)
+        );
+        assert_eq!(ExecutionMode::parse("bogus"), None);
+        assert_eq!(ExecutionMode::OneShot.as_str(), EXECUTION_MODE_ONE_SHOT);
     }
 
     #[test]

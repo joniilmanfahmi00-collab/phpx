@@ -101,6 +101,19 @@ async fn composer_autoload_and_sapi_superglobals() {
     assert!(body.contains("ua=phpx-m4-test"), "{body}");
     assert!(body.contains("hello-body-m4"), "{body}");
 
+    // Urlencoded form body populates $_POST (web-SAPI parity for classic forms).
+    let r = client
+        .post(format!("{base}/submit"))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body("pname=ara-form&other=1")
+        .send()
+        .await
+        .expect("POST form");
+    assert_eq!(r.status().as_u16(), 200);
+    let body = r.text().await.unwrap();
+    assert!(body.contains("post_pname=ara-form"), "{body}");
+    assert!(body.contains("method=POST"), "{body}");
+
     // Static asset.
     let (code, body, _) = get(&client, &base, "/style.css").await;
     assert_eq!(code, 200, "{body}");
@@ -184,6 +197,22 @@ async fn wordpress_and_woocommerce_smoke() {
 }
 
 #[tokio::test]
+async fn one_shot_gateway_spawns_fresh_process_per_request() {
+    // P0-A gateway-level proof: PIDs via /pid.php must differ across
+    // sequential requests (request-scoped lifetime, not persistent reuse).
+    let cfg = cfg_for("vanilla-php", 2);
+    let (addr, handle) = phpx_server::spawn_test_server(cfg).await.expect("spawn");
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+    let (_, b1, _) = get(&client, &base, "/pid.php").await;
+    let (_, b2, _) = get(&client, &base, "/pid.php").await;
+    assert!(b1.contains("pid="), "{b1}");
+    assert!(b2.contains("pid="), "{b2}");
+    assert_ne!(b1.trim(), b2.trim(), "one-shot gateway must use fresh PIDs");
+    handle.abort();
+}
+
+#[tokio::test]
 async fn metrics_endpoint_exposes_pool_counters() {
     let cfg = cfg_for("vanilla-php", 2);
     let (addr, handle) = phpx_server::spawn_test_server(cfg).await.expect("spawn");
@@ -199,6 +228,7 @@ async fn metrics_endpoint_exposes_pool_counters() {
     assert!(r.headers().contains_key("x-request-id"));
     let body = r.text().await.unwrap();
     for key in [
+        "phpx_execution_mode_info",
         "phpx_pool_completed_total",
         "phpx_pool_failed_total",
         "phpx_pool_timeouts_total",
@@ -212,5 +242,9 @@ async fn metrics_endpoint_exposes_pool_counters() {
     ] {
         assert!(body.contains(key), "missing {key} in:\n{body}");
     }
+    assert!(
+        body.contains("execution_mode=\"one-shot\""),
+        "metrics must distinguish execution mode:\n{body}"
+    );
     handle.abort();
 }

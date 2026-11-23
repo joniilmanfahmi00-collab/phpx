@@ -1,7 +1,7 @@
 use phpx_core::{PhpxError, Result};
 use phpx_runtime::{PhpRequest, PhpResponse, WorkerOutcome};
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -29,6 +29,10 @@ pub struct ExecuteOptions {
     pub timeout: Duration,
     /// Extra env for the child (plus PHPX_* request vars).
     pub env: HashMap<String, String>,
+    /// PHP-level heap limit passed as `-d memory_limit=...` (e.g. "256M").
+    /// None = leave the php default. This bounds the Zend heap, NOT OS RSS
+    /// (see P0-C guardian for OS-level soft/hard RSS policy).
+    pub memory_limit: Option<String>,
 }
 
 impl Default for ExecuteOptions {
@@ -36,6 +40,7 @@ impl Default for ExecuteOptions {
         Self {
             timeout: Duration::from_secs(30),
             env: HashMap::new(),
+            memory_limit: None,
         }
     }
 }
@@ -165,6 +170,15 @@ pub fn execute_one_shot(
     let headers_json = serde_json::to_string(&req.headers).unwrap_or_else(|_| "{}".to_string());
     let bootstrap_path = ensure_bootstrap_file();
     let mut cmd = Command::new(php_bin);
+    // PHP-level heap limit (validated size string at config layer).
+    // Bounds the Zend heap only; OS RSS is governed by the P0-C guardian.
+    if let Some(limit) = opts
+        .memory_limit
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        cmd.arg("-d").arg(format!("memory_limit={limit}"));
+    }
     cmd.arg("-d")
         .arg(format!("auto_prepend_file={}", bootstrap_path.display()))
         .arg(&entry)
@@ -194,6 +208,25 @@ pub fn execute_one_shot(
         ))
     })?;
 
+    // P0-D fix: drain stdout/stderr concurrently. Reading only after the
+    // child exits deadlocks once output exceeds the OS pipe buffer (a real
+    // Laravel page is ~80KB > 64KB): the child blocks on write while the
+    // supervisor waits for exit.
+    let stdout_thread = child.stdout.take().map(|mut out| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = out.read_to_end(&mut buf);
+            buf
+        })
+    });
+    let stderr_thread = child.stderr.take().map(|mut err| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = err.read_to_end(&mut buf);
+            buf
+        })
+    });
+
     if !req.body.is_empty() {
         if let Some(mut stdin) = child.stdin.take() {
             // Best-effort body write; broken pipe means child exited early.
@@ -201,22 +234,23 @@ pub fn execute_one_shot(
         }
     }
 
+    let join_pipes = || {
+        let stdout = stdout_thread
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
+        let stderr = stderr_thread
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
+        (stdout, stderr)
+    };
+
     match child
         .wait_timeout(opts.timeout)
         .map_err(|e| PhpxError::Runtime(format!("wait_timeout failed: {e}")))?
     {
         Some(status) => {
             let duration_ms = started.elapsed().as_millis() as u64;
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
-            if let Some(mut out) = child.stdout.take() {
-                use std::io::Read;
-                let _ = out.read_to_end(&mut stdout);
-            }
-            if let Some(mut err) = child.stderr.take() {
-                use std::io::Read;
-                let _ = err.read_to_end(&mut stderr);
-            }
+            let (stdout, stderr) = join_pipes();
             if status.success() {
                 Ok(PhpResponse {
                     request_id: req.request_id.clone(),
@@ -248,6 +282,8 @@ pub fn execute_one_shot(
         None => {
             let _ = child.kill();
             let _ = child.wait();
+            // Unblock the drain threads: pipes hit EOF once the child dies.
+            let _ = join_pipes();
             let duration_ms = started.elapsed().as_millis() as u64;
             Ok(PhpResponse {
                 request_id: req.request_id.clone(),

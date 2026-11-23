@@ -34,9 +34,40 @@ Lihat baseline.md: fixture vanilla-php wajib + laravel-minimal opsional, workloa
 
 - scripts/bench-compare.sh / bench-compare-windows.ps1: phpx vs php -S docroot sami, workload sami. php-fpm/FrankenPHP/RR tinggal ganti langkah 2, prinsip sami: hardware + build + app + tuning sami, klaim = delta vs baseline.
 
+## P1-B laboratory (harness + release numbers, NOT an SLA)
+
+Harness: `scripts/bench-lab.sh` / `scripts/bench-lab.ps1`
+`[--port 18082] [--requests 200] [--concurrency 10] [--mode one-shot|persistent] [--profile debug|release] [--backend phpx|php-builtin] [--workers 4] [--out-dir data/bench/<auto>]`.
+
+Methodology (perbandingan adil): host sami, PHP sami, fixture sami
+(`examples/vanilla-php`, `/`), mix sami (GET `/` x N), concurrency sami,
+worker/tuning sami, **release build kanggo klaim performa**, report
+mentah (JSON `summary.json`: cold_ms, warm p50/p95/p99/max/mean, RPS,
+gateway RSS start/max/end, config, versions) + `metrics.txt` + gateway log.
+`data/bench/` gitignored; raw dataset disimpen 30 poé.
+
+Hasil lab 2026-11-23 (mesin dev Aa, Windows 10 Pro, PHP 8.3.30, rustc 1.99.1,
+200 req, concurrency 10, workers 4, release + thin LTO):
+
+| Backend | RPS | cold_ms | warm mean/p50/p95/p99/max (ms) | gateway RSS start/max (KB) | failures |
+|---|---|---|---|---|---|
+| phpx one-shot | 3.86 | 215 | 719.7 / 702.3 / 1295.5 / 1649.3 / 1728.1 | 7892 / 9624 | 0 |
+| phpx persistent | 5.77 | 16 | 93.4 / 82.0 / 231.1 / 272.6 / 294.0 | 8184 / 9324 | 0 |
+| php-builtin (`php -S`) | 6.09 | 118 | 58.8 / 52.5 / 147.5 / 162.0 / 259.2 | n/a | 0 |
+
+Maca tabel: persistent ~8.5x leuwih gancang median batan one-shot spawn path
+(82ms vs 702ms) — bédana arsitektur, lain tuning. php -S single-threaded
+ngantri di jerona sorangan; gateway PHPX nambahkeun overhead dispatch +
+fork PHP per request dina one-shot. Cold persistent 16ms (worker tos
+pre-spawned) vs one-shot 215ms (spawn PHP pertama).
+Caveat: mesin dev Windows (spawn process mahal), single node, teu aya SLA.
+Dimensi séjén (reliability, soak, drain/restart timing) aya di P1-A
+(`docs/operations/resilience.md`), lain di tabel ieu.
+
 ## Soak-long
 
 - scripts/soak-long.sh / soak-long-windows.ps1: sample RSS tiap 60 dtk ka CSV, slope KB/menit. Gateway harus flat, PHP one-shot direclaim OS.
+- **Hasil arsip 2026-11-23** (`data/bench/soak-long-persistent-release/`, release, persistent, 60 mnt, 4 workers, vanilla `/`, 200 req/ronde sekuensial): **12.600/12.600 sukses** (failed/timeout/rejected/circuit = 0); gateway RSS 8732 -> 8948 KB (slope +3,6 KB/mnt, band 324 KB — flat, lain leak); **25 recycle graceful** `recycle-budget` tepat sesuai `max_requests=500` (12600/500), 0 error. Detail + caveat (serial load PS5.1, dev box, 6h/24h masih perlu) di `SUMMARY.md` dalam dir arsip.
 ## Hasil benchmark RC (dicatet 2026-11-19, developer machine Aa — BUKAN SLA)
 
 Hardware: AMD A8-9600, RAM 6,9 GB, Windows 10 Pro + WSL2 Debian 12.

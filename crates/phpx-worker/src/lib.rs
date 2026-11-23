@@ -4,11 +4,26 @@ use phpx_runtime_process::{ExecuteOptions, PhpDiscovery};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+pub mod memory;
+pub mod persistent;
+pub use memory::{classify, sample_rss, MemoryClass, MemorySample};
+pub use persistent::{
+    PersistentPool, PersistentPoolConfig, WorkerEvent, WorkerSnapshot, WorkerState,
+};
+
 /// M4 hardened pool config: min/max, bounded queue, timeouts, drain, restart policy.
+/// P0-A: `execution_mode` is explicit. Only `"one-shot"` runs; `"persistent"`
+/// is rejected until the P0-B supervised pool exists.
 #[derive(Debug, Clone)]
 pub struct PoolConfig {
     pub max_workers: u32,
     pub min_workers: u32,
+    pub execution_mode: String,
+    /// PHP-level heap limit (`-d memory_limit`) applied to every one-shot
+    /// child. None = php default. This is a PHP-heap limit, NOT an OS RSS
+    /// limit (one-shot processes are short-lived; the RSS guardian is
+    /// persistent-only per ADR-0014 Phase B).
+    pub php_memory_limit: Option<String>,
     pub queue_bound: usize,
     pub queue_wait_timeout: Duration,
     pub execution_timeout: Duration,
@@ -25,6 +40,8 @@ impl Default for PoolConfig {
         Self {
             max_workers: 4,
             min_workers: 1,
+            execution_mode: phpx_runtime::EXECUTION_MODE_ONE_SHOT.to_string(),
+            php_memory_limit: None,
             queue_bound: 16,
             queue_wait_timeout: Duration::from_secs(2),
             execution_timeout: Duration::from_secs(30),
@@ -39,7 +56,32 @@ impl Default for PoolConfig {
 }
 
 impl PoolConfig {
+    /// Canonical execution mode. Defaults to one-shot when unset/blank.
+    pub fn resolved_execution_mode(&self) -> &'static str {
+        match phpx_runtime::ExecutionMode::parse(&self.execution_mode) {
+            Some(phpx_runtime::ExecutionMode::Persistent) => {
+                phpx_runtime::EXECUTION_MODE_PERSISTENT
+            }
+            _ => phpx_runtime::EXECUTION_MODE_ONE_SHOT,
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
+        match phpx_runtime::ExecutionMode::parse(&self.execution_mode) {
+            Some(phpx_runtime::ExecutionMode::OneShot) => {}
+            Some(phpx_runtime::ExecutionMode::Persistent) => {
+                return Err(PhpxError::Config(
+                    "execution_mode=persistent needs PersistentPool, not BoundedPool (one-shot pool rejects persistent work)"
+                        .to_string(),
+                ));
+            }
+            None => {
+                return Err(PhpxError::Config(format!(
+                    "execution_mode must be one-shot or persistent, got {}",
+                    self.execution_mode
+                )));
+            }
+        }
         if self.max_workers == 0 || self.max_workers > 1024 {
             return Err(PhpxError::Config(
                 "max_workers must be 1-1024 (bounded, no unbounded pool)".to_string(),
@@ -107,6 +149,9 @@ struct PoolState {
 }
 
 /// Bounded worker pool over one-shot PHP processes (M1) hardened in M4.
+/// P0-A: execution mode is explicit (`execution_mode`, default one-shot);
+/// persistent workers belong to PersistentPool and are rejected here by
+/// `PoolConfig::validate`.
 pub struct BoundedPool {
     cfg: PoolConfig,
     discovery: PhpDiscovery,
@@ -245,6 +290,7 @@ impl BoundedPool {
         let opts = ExecuteOptions {
             timeout: self.cfg.execution_timeout,
             env: Default::default(),
+            memory_limit: self.cfg.php_memory_limit.clone(),
         };
         let php_bin = self.cfg.php_bin.clone();
         let out = phpx_runtime_process::execute_one_shot(&php_bin, req, &opts);
@@ -328,10 +374,14 @@ impl BoundedPool {
     }
 
     /// Prometheus text exposition for M4 observability.
+    /// P0-A: includes `phpx_execution_mode_info` so one-shot vs persistent
+    /// executions are machine-distinguishable even before P0-B lands.
     pub fn prometheus_text(&self) -> String {
         let s = self.snapshot();
         format!(
-            "# HELP phpx_pool_completed_total Completed PHP executions.\n# TYPE phpx_pool_completed_total counter\nphpx_pool_completed_total {}\n# HELP phpx_pool_failed_total Failed PHP executions (non-200, non-timeout).\n# TYPE phpx_pool_failed_total counter\nphpx_pool_failed_total {}\n# HELP phpx_pool_timeouts_total Execution timeouts (HTTP 504).\n# TYPE phpx_pool_timeouts_total counter\nphpx_pool_timeouts_total {}\n# HELP phpx_pool_rejected_overload_total Rejected by backpressure (HTTP 503).\n# TYPE phpx_pool_rejected_overload_total counter\nphpx_pool_rejected_overload_total {}\n# HELP phpx_pool_recycled_total Logical worker-slot recycles.\n# TYPE phpx_pool_recycled_total counter\nphpx_pool_recycled_total {}\n# HELP phpx_pool_restarts_total Restart attempts after failures.\n# TYPE phpx_pool_restarts_total counter\nphpx_pool_restarts_total {}\n# HELP phpx_pool_circuit_breaks_total Crash-loop circuit openings.\n# TYPE phpx_pool_circuit_breaks_total counter\nphpx_pool_circuit_breaks_total {}\n# HELP phpx_pool_active Currently executing requests.\n# TYPE phpx_pool_active gauge\nphpx_pool_active {}\n# HELP phpx_pool_waiting Currently queued requests.\n# TYPE phpx_pool_waiting gauge\nphpx_pool_waiting {}\n# HELP phpx_pool_max_workers Configured max workers.\n# TYPE phpx_pool_max_workers gauge\nphpx_pool_max_workers {}\n# HELP phpx_pool_min_workers Configured min workers.\n# TYPE phpx_pool_min_workers gauge\nphpx_pool_min_workers {}\n",
+            "# HELP phpx_execution_mode_info Selected execution mode (explicit one-shot throttle; persistent mode runs on PersistentPool).\n# TYPE phpx_execution_mode_info gauge\nphpx_execution_mode_info{{execution_mode=\"{}\",protocol_version=\"{}\"}} 1\n# HELP phpx_pool_completed_total Completed PHP executions.\n# TYPE phpx_pool_completed_total counter\nphpx_pool_completed_total {}\n# HELP phpx_pool_failed_total Failed PHP executions (non-200, non-timeout).\n# TYPE phpx_pool_failed_total counter\nphpx_pool_failed_total {}\n# HELP phpx_pool_timeouts_total Execution timeouts (HTTP 504).\n# TYPE phpx_pool_timeouts_total counter\nphpx_pool_timeouts_total {}\n# HELP phpx_pool_rejected_overload_total Rejected by backpressure (HTTP 503).\n# TYPE phpx_pool_rejected_overload_total counter\nphpx_pool_rejected_overload_total {}\n# HELP phpx_pool_recycled_total Logical worker-slot recycles (one-shot isolates per request already; persistent recycles for real).\n# TYPE phpx_pool_recycled_total counter\nphpx_pool_recycled_total {}\n# HELP phpx_pool_restarts_total Restart attempts after failures.\n# TYPE phpx_pool_restarts_total counter\nphpx_pool_restarts_total {}\n# HELP phpx_pool_circuit_breaks_total Crash-loop circuit openings.\n# TYPE phpx_pool_circuit_breaks_total counter\nphpx_pool_circuit_breaks_total {}\n# HELP phpx_pool_active Currently executing requests.\n# TYPE phpx_pool_active gauge\nphpx_pool_active {}\n# HELP phpx_pool_waiting Currently queued requests.\n# TYPE phpx_pool_waiting gauge\nphpx_pool_waiting {}\n# HELP phpx_pool_max_workers Configured max workers.\n# TYPE phpx_pool_max_workers gauge\nphpx_pool_max_workers {}\n# HELP phpx_pool_min_workers Configured min workers.\n# TYPE phpx_pool_min_workers gauge\nphpx_pool_min_workers {}\n",
+            self.cfg.resolved_execution_mode(),
+            phpx_runtime::PROTOCOL_VERSION,
             s.completed,
             s.failed,
             s.timeouts,
@@ -379,6 +429,37 @@ mod tests {
         let b30 = cfg.backoff_for_retry(30);
         assert!(b3 > b0);
         assert!(b30 <= cfg.restart_backoff_max * 2);
+    }
+
+    #[test]
+    fn rejects_persistent_execution_mode_in_oneshot_pool() {
+        // P0-B: persistent work belongs to PersistentPool; the one-shot
+        // BoundedPool refuses it so modes can never be confused.
+        let bad = PoolConfig {
+            execution_mode: "persistent".to_string(),
+            ..Default::default()
+        };
+        let err = match BoundedPool::new(bad) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("persistent mode must not run on BoundedPool"),
+        };
+        assert!(err.contains("PersistentPool"), "{err}");
+        let bad_name = PoolConfig {
+            execution_mode: "bogus".to_string(),
+            ..Default::default()
+        };
+        assert!(BoundedPool::new(bad_name).is_err());
+    }
+
+    #[test]
+    fn execution_mode_metric_distinguishes_one_shot() {
+        let pool = BoundedPool::new(PoolConfig::default()).unwrap();
+        let text = pool.prometheus_text();
+        assert!(
+            text.contains("phpx_execution_mode_info{execution_mode=\"one-shot\""),
+            "{text}"
+        );
+        assert!(text.contains("protocol_version=\"1\""), "{text}");
     }
 
     #[test]

@@ -16,6 +16,22 @@ jobs:
 
   clippy-test:
     runs-on: ubuntu-latest
+    services:
+      # P0-D tahap 2: isolated database for the real WordPress smoke test.
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: wordpress
+          MARIADB_USER: wp
+          MARIADB_PASSWORD: wp
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -23,6 +39,29 @@ jobs:
           toolchain: "1.99.1"
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # P0-D: real Laravel smoke needs PHP + Composer on the runner.
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: mbstring, xml, ctype, json, bcmath, tokenizer, fileinfo, openssl, pdo, pdo_sqlite, curl, gd, intl
+          tools: composer
+          coverage: none
+      # P0-D tahap 2: real WordPress smoke (wp-cli + provision against the service above).
+      - run: |
+          curl -sS https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o /tmp/wp-cli.phar
+          printf '#!/bin/sh\nexec php /tmp/wp-cli.phar --allow-root "$@"\n' | sudo tee /usr/local/bin/wp >/dev/null
+          sudo chmod +x /usr/local/bin/wp
+          wp --info | head -2
+      - run: |
+          export PHPX_WP_DB_HOST=127.0.0.1 PHPX_WP_DB_PORT=3306
+          bash scripts/setup-wordpress-smoke.sh
+      # P0-D item 5: WooCommerce on top of the provisioned WordPress.
+      - run: |
+          export PHPX_WP_DB_HOST=127.0.0.1 PHPX_WP_DB_PORT=3306
+          bash scripts/setup-woocommerce-smoke.sh
+      # P1-B: laboratory methodology smoke (debug, small N; numbers are not claims).
+      # (P1-A soak gate runs inside `cargo test --workspace` below.)
+      - run: bash scripts/bench-lab.sh --requests 60 --concurrency 4 --mode one-shot --out-dir /tmp/bench-lab-ci
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --workspace
