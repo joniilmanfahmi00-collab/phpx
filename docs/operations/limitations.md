@@ -46,9 +46,11 @@ responsible.
   as HTTP 200 with the rendered body, and `?p=N`-style canonical redirects
   (WordPress pretty permalinks on) arrive as empty 200s. Crash -> 500 and
   timeout -> 504 are gateway-mapped and unaffected. See `sapi-audit.md`.
-- Sessions (`$_SESSION` persistence), `$_FILES`/multipart parsing, and
-  `php://input` under CLI are not emulated (multipart bodies arrive raw on
-  stdin). No session/upload/file-write integration tests on real apps yet.
+- Sessions (`$_SESSION` persistence) and raw `php://input` bodies under CLI
+  are not emulated. Multipart/form-data populates `$_POST`/`$_FILES`
+  (fixture `upload.php` pins the contract); `move_uploaded_file()` stays
+  false under CLI — read `tmp_name` or `rename()` it. No session/file-write
+  integration tests on real apps yet.
 - Persistent workers reuse the PHP process: `$GLOBALS`/statics set by app code
   persist across requests (pinned by test). Use one-shot when strict isolation
   is required. Function redefinition on re-include fatals the worker (restarted,

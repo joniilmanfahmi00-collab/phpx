@@ -30,17 +30,35 @@
   status pages, `fastcgi_*` functions, or `.user.ini` FPM semantics.
 - `php://input`: empty under CLI. Workaround (documented, used by fixtures):
   `function_exists("phpx_input") ? phpx_input() : file_get_contents("php://input")`.
+- Multipart/form-data is parsed in PHP (RC track): `$_POST` (incl. `a[]`,
+  `a[b]` shapes) and `$_FILES` (plain, `f[]`, `a[b]` shapes) are populated
+  from the raw body in both one-shot (`bootstrap.php`) and persistent
+  (`worker-persistent.php`) workers; temp files via `tempnam()` tracked in
+  `$GLOBALS["PHPX_TMP_FILES"]` and unlinked after the request (shutdown
+  function one-shot, next-request cleanup persistent). Caps: boundary <= 200
+  chars, <= 200 parts, boundary match requires a valid `--`/`CRLF` trailer so
+  lookalike bytes inside file content do not split. Raw bytes stay available
+  via `phpx_input()`.
+- `move_uploaded_file()` / `is_uploaded_file()`: always false under CLI SAPI
+  (PHP only trusts real SAPI uploads). Read bytes via
+  `file_get_contents($_FILES[...]["tmp_name"])` or `rename()` the temp file.
+  Real apps that call `move_uploaded_file()` (e.g. WP `wp_handle_upload`)
+  need an app-side bypass; fixture `examples/vanilla-php/public/upload.php`
+  pins the supported contract.
 - Apps that terminate the process (`exit`/`die`, e.g. WordPress `wp_redirect`
   and REST serving paths) kill a persistent worker: the supervisor maps it to
   500 + restart with a new incarnation and resyncs the stream
   (pinned by `p1a: app_exit_kills_worker_and_pool_resyncs`). One-shot captures
   the flushed output as the response body instead. Prefer one-shot for apps
   that exit per request.
-  This blocks REST/file-upload request *bodies* (e.g. WP media `rest_upload_no_data`).
-- `$_FILES` / multipart parsing: not emulated. Multipart bodies arrive raw on
-  stdin and route handling still works (Laravel multipart POST -> graceful 405),
-  but uploaded files are never materialized; frameworks that need `$_FILES`
-  require future SAPI work.
+  This blocks REST/file-upload request *bodies* sent as raw octets
+  (e.g. WP media `rest_upload_no_data` for `Content-Type: image/png`).
+  Multipart uploads populate `$_FILES` (see above); only the raw
+  `php://input` path stays empty.
+- `$_FILES` under CLI SAPI: populated by the PHPX parser (see above), not by
+  PHP itself. Routing still works as before (Laravel multipart POST ->
+  graceful 405); `move_uploaded_file()` stays false — read `tmp_name` or
+  `rename()` it.
 - `$_SESSION` persistence: not emulated (no session file/cookie round-trip
   through the gateway). Apps that store sessions server-side (Laravel database
   driver) still persist rows and can be asserted DB-side; the session *cookie*

@@ -213,6 +213,115 @@ async fn one_shot_gateway_spawns_fresh_process_per_request() {
 }
 
 #[tokio::test]
+async fn multipart_populates_post_and_files() {
+    // RC track: multipart/form-data parsed in PHP so $_POST/$_FILES work under
+    // CLI SAPI (both one-shot bootstrap and persistent worker share the parser).
+    // Covers: plain field, tags[], meta[a][b], single file, files[], nested
+    // file input, binary-safe bytes, and $_REQUEST merge.
+    let cfg = cfg_for("vanilla-php", 2);
+    let (addr, handle) = phpx_server::spawn_test_server(cfg).await.expect("spawn");
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+    // Manual multipart body (no reqwest multipart feature): plain field,
+    // tags[], meta[q], single file, files[], nested file input.
+    let boundary = "phpx-test-boundary-456";
+    let body = format!(
+        "--{b}\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nphpx\r\n\
+         --{b}\r\nContent-Disposition: form-data; name=\"tags[]\"\r\n\r\na\r\n\
+         --{b}\r\nContent-Disposition: form-data; name=\"tags[]\"\r\n\r\nb\r\n\
+         --{b}\r\nContent-Disposition: form-data; name=\"meta[q]\"\r\n\r\ncari\r\n\
+         --{b}\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"up.txt\"\r\nContent-Type: text/plain\r\n\r\nhello-upload\r\n\
+         --{b}\r\nContent-Disposition: form-data; name=\"docs[]\"; filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\nAAA\r\n\
+         --{b}\r\nContent-Disposition: form-data; name=\"docs[]\"; filename=\"b.txt\"\r\nContent-Type: text/plain\r\n\r\nBBB\r\n\
+         --{b}\r\nContent-Disposition: form-data; name=\"up[file]\"; filename=\"n.txt\"\r\nContent-Type: text/plain\r\n\r\nDATA\r\n\
+         --{b}--\r\n",
+        b = boundary
+    );
+    let r = client
+        .post(format!("{base}/upload.php"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(body)
+        .send()
+        .await
+        .expect("POST multipart");
+    assert_eq!(r.status().as_u16(), 200);
+    let body = r.text().await.unwrap_or_default();
+    assert!(body.contains("upload-fixture"), "{body}");
+    assert!(body.contains("post_note=phpx"), "{body}");
+    assert!(body.contains("\"a\",\"b\""), "tags[] must parse: {body}");
+    assert!(body.contains("\"cari\""), "meta[q] must parse: {body}");
+    assert!(body.contains("doc_name=up.txt"), "{body}");
+    assert!(body.contains("doc_content=hello-upload"), "{body}");
+    assert!(body.contains("doc_error=0"), "{body}");
+    assert!(body.contains("docs_count=2"), "{body}");
+    assert!(body.contains("docs_0=a.txt:AAA"), "{body}");
+    assert!(body.contains("docs_1=b.txt:BBB"), "{body}");
+    assert!(body.contains("up_name=n.txt"), "{body}");
+    assert!(body.contains("up_content=DATA"), "{body}");
+    handle.abort();
+}
+
+#[tokio::test]
+async fn multipart_populates_post_and_files_persistent() {
+    // Same parser through the supervised persistent worker: two sequential
+    // posts must each see only their own $_POST/$_FILES (reset + tmp cleanup).
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/vanilla-php")
+        .to_string_lossy()
+        .to_string();
+    let toml = format!(
+        "schema_version = 1\n[server]\nhost = \"127.0.0.1\"\nport = 8080\ntls = false\nrequest_body_limit = \"1MB\"\n[application]\nroot = \'{root}\'\ndocument_root = \"public\"\nentrypoint = \"index.php\"\n[runtime]\nmode = \"process\"\nphp_version = \"8.4\"\n[runtime.process]\nexecution_mode = \"persistent\"\nworkers = 1\nmin_workers = 1\nmax_requests = 100\nrequest_timeout_seconds = 10\nstartup_timeout_seconds = 15\nmemory_limit = \"256M\"\nqueue_wait_timeout_seconds = 2\nshutdown_drain_timeout_seconds = 5\nrestart_max_retries = 3\nrestart_backoff_ms = 50\nrestart_backoff_max_ms = 500\n"
+    );
+    let cfg = PhpxConfig::parse_str(&toml).expect("persistent fixture config must parse");
+    let (addr, handle) = phpx_server::spawn_test_server(cfg).await.expect("spawn");
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+    let boundary = "phpx-test-boundary-789";
+    let body = format!(
+        "--{b}\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nkeep\r\n\
+         --{b}\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"keep.txt\"\r\nContent-Type: text/plain\r\n\r\nKEEP1\r\n\
+         --{b}--\r\n",
+        b = boundary
+    );
+    let r = client
+        .post(format!("{base}/upload.php"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(body)
+        .send()
+        .await
+        .expect("POST multipart 1");
+    assert_eq!(r.status().as_u16(), 200);
+    let b1 = r.text().await.unwrap_or_default();
+    assert!(b1.contains("doc_content=KEEP1"), "{b1}");
+    // Second request without files must not see the first request's uploads.
+    let body2 = format!(
+        "--{b}\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nsecond\r\n--{b}--\r\n",
+        b = boundary
+    );
+    let r = client
+        .post(format!("{base}/upload.php"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(body2)
+        .send()
+        .await
+        .expect("POST multipart 2");
+    assert_eq!(r.status().as_u16(), 200);
+    let b2 = r.text().await.unwrap_or_default();
+    assert!(b2.contains("post_note=second"), "{b2}");
+    assert!(b2.contains("doc_missing"), "stale $_FILES leaked: {b2}");
+    handle.abort();
+}
+
+#[tokio::test]
 async fn metrics_endpoint_exposes_pool_counters() {
     let cfg = cfg_for("vanilla-php", 2);
     let (addr, handle) = phpx_server::spawn_test_server(cfg).await.expect("spawn");

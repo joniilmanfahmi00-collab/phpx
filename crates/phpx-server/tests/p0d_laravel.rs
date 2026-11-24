@@ -258,9 +258,10 @@ async fn laravel_json_error_for_wrong_method() {
 
 #[tokio::test]
 async fn laravel_multipart_is_rejected_gracefully() {
-    // P1-B integration: multipart bodies arrive raw (no $_FILES under CLI
-    // SAPI — documented limit), but the request must not crash the worker:
-    // routing rejects it as 405 with the framework page.
+    // P1-B integration: multipart bodies are parsed by the SAPI shim
+    // ($_POST/$_FILES populated, like the upload fixture pins), but this
+    // route is GET-only so routing still answers 405 with the framework page
+    // and the worker must not crash.
     let cfg = cfg_for_laravel(2);
     let (addr, handle) = phpx_server::spawn_test_server(cfg).await.expect("spawn");
     let base = format!("http://{addr}");

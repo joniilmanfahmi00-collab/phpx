@@ -19,14 +19,16 @@ error_reporting(E_ALL);
 ini_set("display_errors", "0");
 ini_set("log_errors", "1");
 //
-// Per-request SAPI reset (partial; see limits below): $_GET/$_POST/$_COOKIE/
-// $_REQUEST are rebuilt from the frame, PHPX_* vars are putenv()d per request
+// Per-request SAPI reset (partial; see limits below): $_GET/$_POST/$_FILES/
+// $_COOKIE/$_REQUEST are rebuilt from the frame, PHPX_* vars are putenv()d per request
 // (process env cannot change per request from the supervisor side), and the
 // entry file is included. `phpx_input()` returns the frame body.
 // Output buffering is reset per request; http_response_code(200) restored.
 //
-// Known limits (P0-B, same as sapi-audit): $_FILES/multipart and $_SESSION
-// persistence are NOT emulated; `exit()`/`die()` in app code terminates the
+// Known limits (P0-B, same as sapi-audit): move_uploaded_file() /
+// is_uploaded_file() return false under CLI SAPI (read bytes via
+// file_get_contents($_FILES[...]["tmp_name"]) or rename() it instead);
+// $_SESSION persistence is NOT emulated; `exit()`/`die()` in app code terminates the
 // whole worker (supervisor restarts it with a new incarnation); static
 // variables and $GLOBALS set by app code persist across requests in the same
 // worker (documented state-leakage limit of persistent mode; use one-shot
@@ -59,6 +61,221 @@ if (!function_exists("phpx_input")) {
   }
 }
 
+if (!function_exists("phpx_cleanup_tmp_files")) {
+  function phpx_cleanup_tmp_files() {
+    if (!isset($GLOBALS["PHPX_TMP_FILES"]) || !is_array($GLOBALS["PHPX_TMP_FILES"])) { return; }
+    foreach ($GLOBALS["PHPX_TMP_FILES"] as $__f) {
+      if (is_string($__f) && $__f !== "" && is_file($__f)) { @unlink($__f); }
+    }
+    $GLOBALS["PHPX_TMP_FILES"] = [];
+  }
+}
+if (!function_exists("phpx_assign_post_value")) {
+  function phpx_assign_post_value(&$__dest, $__name, $__value) {
+    $__pos = strpos($__name, "[");
+    if ($__pos === false) {
+      if ($__name !== "") { $__dest[$__name] = $__value; }
+      return;
+    }
+    $__base = substr($__name, 0, $__pos);
+    if ($__base === "") { return; }
+    preg_match_all('/\[([^\]]*)\]/', $__name, $__m);
+    $__keys = $__m[1];
+    if (!isset($__dest[$__base]) || !is_array($__dest[$__base])) { $__dest[$__base] = []; }
+    $__ref =& $__dest[$__base];
+    $__n = count($__keys);
+    foreach ($__keys as $__i => $__k) {
+      $__last = ($__i === $__n - 1);
+      if ($__k === "") {
+        if ($__last) { $__ref[] = $__value; }
+        else {
+          $__ref[] = [];
+          end($__ref); $__idx = key($__ref);
+          $__ref =& $__ref[$__idx];
+        }
+      } else {
+        if ($__last) { $__ref[$__k] = $__value; }
+        else {
+          if (!isset($__ref[$__k]) || !is_array($__ref[$__k])) { $__ref[$__k] = []; }
+          $__ref =& $__ref[$__k];
+        }
+      }
+    }
+    unset($__ref);
+  }
+}
+if (!function_exists("phpx_assign_file_entry")) {
+  function phpx_assign_file_entry($__field, $__entry) {
+    $__pos = strpos($__field, "[");
+    if ($__pos === false) {
+      if ($__field !== "") { $_FILES[$__field] = $__entry; }
+      return;
+    }
+    $__base = substr($__field, 0, $__pos);
+    if ($__base === "") { return; }
+    preg_match_all('/\[([^\]]*)\]/', $__field, $__m);
+    $__keys = $__m[1];
+    if (!isset($_FILES[$__base]) || !is_array($_FILES[$__base]) || !isset($_FILES[$__base]["name"])) {
+      $_FILES[$__base] = ["name" => [], "type" => [], "tmp_name" => [], "error" => [], "size" => []];
+    }
+    foreach (["name", "type", "tmp_name", "error", "size"] as $__k) {
+      if (!isset($_FILES[$__base][$__k]) || !is_array($_FILES[$__base][$__k])) { $_FILES[$__base][$__k] = []; }
+    }
+    $__rn =& $_FILES[$__base]["name"];
+    $__rt =& $_FILES[$__base]["type"];
+    $__rp =& $_FILES[$__base]["tmp_name"];
+    $__re =& $_FILES[$__base]["error"];
+    $__rs =& $_FILES[$__base]["size"];
+    $__n = count($__keys);
+    foreach ($__keys as $__i => $__k) {
+      $__last = ($__i === $__n - 1);
+      if ($__k === "") {
+        if ($__last) {
+          $__rn[] = $__entry["name"]; $__rt[] = $__entry["type"]; $__rp[] = $__entry["tmp_name"];
+          $__re[] = $__entry["error"]; $__rs[] = $__entry["size"];
+        } else {
+          $__rn[] = []; $__rt[] = []; $__rp[] = []; $__re[] = []; $__rs[] = [];
+          end($__rn); $__idx = key($__rn);
+          $__rn =& $__rn[$__idx]; $__rt =& $__rt[$__idx]; $__rp =& $__rp[$__idx]; $__re =& $__re[$__idx]; $__rs =& $__rs[$__idx];
+        }
+      } else {
+        if ($__last) {
+          $__rn[$__k] = $__entry["name"]; $__rt[$__k] = $__entry["type"]; $__rp[$__k] = $__entry["tmp_name"];
+          $__re[$__k] = $__entry["error"]; $__rs[$__k] = $__entry["size"];
+        } else {
+          if (!isset($__rn[$__k]) || !is_array($__rn[$__k])) { $__rn[$__k] = []; }
+          if (!isset($__rt[$__k]) || !is_array($__rt[$__k])) { $__rt[$__k] = []; }
+          if (!isset($__rp[$__k]) || !is_array($__rp[$__k])) { $__rp[$__k] = []; }
+          if (!isset($__re[$__k]) || !is_array($__re[$__k])) { $__re[$__k] = []; }
+          if (!isset($__rs[$__k]) || !is_array($__rs[$__k])) { $__rs[$__k] = []; }
+          $__rn =& $__rn[$__k]; $__rt =& $__rt[$__k]; $__rp =& $__rp[$__k]; $__re =& $__re[$__k]; $__rs =& $__rs[$__k];
+        }
+      }
+    }
+    unset($__rn, $__rt, $__rp, $__re, $__rs);
+  }
+}
+if (!function_exists("phpx_parse_multipart")) {
+  function phpx_parse_multipart($__raw, $__ctype) {
+    if (!is_string($__raw) || $__raw === "") { return 0; }
+    if (!is_string($__ctype) || $__ctype === "") { return 0; }
+    $__semi = strpos($__ctype, ";");
+    $__type = $__semi === false ? trim($__ctype) : trim(substr($__ctype, 0, $__semi));
+    if (strcasecmp($__type, "multipart/form-data") !== 0) { return 0; }
+    if (!preg_match('/boundary=(?:"([^"]+)"|([^;\s]+))/i', $__ctype, $__m)) { return 0; }
+    $__boundary = (isset($__m[1]) && $__m[1] !== "") ? $__m[1] : trim($__m[2] ?? "");
+    $__boundary = trim($__boundary, '"');
+    if ($__boundary === "" || strlen($__boundary) > 200) { return 0; }
+    $__delim = "--" . $__boundary;
+    $__ld = strlen($__delim);
+    $__start = strpos($__raw, $__delim);
+    if ($__start === false) { return 0; }
+    $__pos = $__start + $__ld;
+    $__chan = substr($__raw, $__pos, 2);
+    if ($__chan === "--") { return 0; }
+    if ($__chan === "\r\n") { $__pos += 2; }
+    elseif (substr($__raw, $__pos, 1) === "\n") { $__pos += 1; }
+    $__parsed = 0;
+    $__guard = 0;
+    $__rlen = strlen($__raw);
+    if (!isset($GLOBALS["PHPX_TMP_FILES"]) || !is_array($GLOBALS["PHPX_TMP_FILES"])) { $GLOBALS["PHPX_TMP_FILES"] = []; }
+    while ($__pos < $__rlen && $__guard < 200) {
+      $__guard++;
+      $__next = false; $__nlLen = 2; $__after = 0; $__tail = "";
+      $__search = $__pos; $__inner = 0;
+      while ($__search < $__rlen && $__inner < 50) {
+        $__inner++;
+        $__cand = strpos($__raw, "\r\n" . $__delim, $__search);
+        $__nl = 2;
+        if ($__cand === false) {
+          $__cand = strpos($__raw, "\n" . $__delim, $__search);
+          $__nl = 1;
+          if ($__cand === false) { break; }
+        }
+        $__a = $__cand + $__nl + $__ld;
+        $__t2 = substr($__raw, $__a, 2);
+        $__t1 = substr($__raw, $__a, 1);
+        if ($__t2 === "--" || $__t2 === "\r\n" || $__t1 === "\n" || $__a >= $__rlen) {
+          $__next = $__cand; $__nlLen = $__nl; $__after = $__a; $__tail = $__t2;
+          break;
+        }
+        $__search = $__cand + $__nl + 1;
+      }
+      if ($__next === false) { break; }
+      $__part = substr($__raw, $__pos, $__next - $__pos);
+      $__isFinal = ($__tail === "--");
+      $__sep = strpos($__part, "\r\n\r\n");
+      $__sepLen = 4;
+      if ($__sep === false) {
+        $__sep = strpos($__part, "\n\n");
+        $__sepLen = 2;
+      }
+      if ($__sep !== false) {
+        $__headStr = substr($__part, 0, $__sep);
+        $__value = substr($__part, $__sep + $__sepLen);
+        $__headNorm = str_replace("\r\n", "\n", $__headStr);
+        $__disp = "";
+        $__ptype = "application/octet-stream";
+        foreach (explode("\n", $__headNorm) as $__line) {
+          $__c = strpos($__line, ":");
+          if ($__c === false) { continue; }
+          $__hn = strtolower(trim(substr($__line, 0, $__c)));
+          $__hv = trim(substr($__line, $__c + 1));
+          if ($__hn === "content-disposition") { $__disp = $__hv; }
+          elseif ($__hn === "content-type") {
+            $__sc = strpos($__hv, ";");
+            $__ptype = $__sc === false ? trim($__hv) : trim(substr($__hv, 0, $__sc));
+            if ($__ptype === "") { $__ptype = "application/octet-stream"; }
+          }
+        }
+        $__fname = null; $__filename = null;
+        if (preg_match('/name="([^"]*)"/', $__disp, $__nm)) { $__fname = $__nm[1]; }
+        elseif (preg_match('/name=([^;\s]+)/i', $__disp, $__nm)) { $__fname = trim($__nm[1], '"'); }
+        if (preg_match('/filename="([^"]*)"/', $__disp, $__fm)) { $__filename = $__fm[1]; }
+        elseif (preg_match('/filename=([^;\s]+)/i', $__disp, $__fm)) { $__filename = trim($__fm[1], '"'); }
+        if ($__fname !== null && $__fname !== "") {
+          if ($__filename === null) {
+            phpx_assign_post_value($_POST, $__fname, $__value);
+            phpx_assign_post_value($_REQUEST, $__fname, $__value);
+            $__parsed++;
+          } else {
+            if ($__filename === "") {
+              phpx_assign_file_entry($__fname, ["name" => "", "type" => "", "tmp_name" => "", "error" => 4, "size" => 0]);
+              $__parsed++;
+            } else {
+              $__safe = basename(str_replace("\\", "/", $__filename));
+              $__tmp = @tempnam(sys_get_temp_dir(), "phpx");
+              if ($__tmp === false) {
+                phpx_assign_file_entry($__fname, ["name" => $__safe, "type" => $__ptype, "tmp_name" => "", "error" => 6, "size" => 0]);
+              } else {
+                $__w = @file_put_contents($__tmp, $__value);
+                if ($__w === false) {
+                  phpx_assign_file_entry($__fname, ["name" => $__safe, "type" => $__ptype, "tmp_name" => "", "error" => 7, "size" => 0]);
+                } else {
+                  phpx_assign_file_entry($__fname, ["name" => $__safe, "type" => $__ptype, "tmp_name" => $__tmp, "error" => 0, "size" => strlen($__value)]);
+                  $GLOBALS["PHPX_TMP_FILES"][] = $__tmp;
+                }
+              }
+              $__parsed++;
+            }
+          }
+        }
+        unset($__headStr, $__value, $__headNorm, $__disp, $__ptype, $__line, $__c, $__hn, $__hv, $__sc, $__fname, $__filename, $__nm, $__fm, $__safe, $__tmp, $__w);
+      }
+      unset($__part, $__sep, $__sepLen);
+      if ($__isFinal) { break; }
+      $__pos = $__after;
+      if (substr($__raw, $__pos, 2) === "\r\n") { $__pos += 2; }
+      elseif (substr($__raw, $__pos, 1) === "\n") { $__pos += 1; }
+      if ($__tail === "--") { break; }
+      unset($__next, $__nlLen, $__after, $__tail, $__search, $__inner, $__cand, $__nl, $__a, $__t2, $__t1, $__isFinal);
+    }
+    unset($__semi, $__type, $__m, $__boundary, $__delim, $__ld, $__start, $__pos, $__chan, $__guard, $__rlen);
+    return $__parsed;
+  }
+}
+register_shutdown_function("phpx_cleanup_tmp_files");
+
 function phpx_read_exact($n) {
   $buf = "";
   while (strlen($buf) < $n) {
@@ -86,8 +303,16 @@ while (true) {
   $t0 = microtime(true);
 
   // ---- Per-request SAPI reset ----
+  // Drop previous request's temp upload files before resetting superglobals.
+  if (isset($GLOBALS["PHPX_TMP_FILES"]) && is_array($GLOBALS["PHPX_TMP_FILES"])) {
+    foreach ($GLOBALS["PHPX_TMP_FILES"] as $__old) {
+      if (is_string($__old) && $__old !== "" && is_file($__old)) { @unlink($__old); }
+    }
+  }
+  $GLOBALS["PHPX_TMP_FILES"] = [];
   $_GET = [];
   $_POST = [];
+  $_FILES = [];
   $_COOKIE = [];
   $_REQUEST = [];
   $rid = (string)$req["request_id"];
@@ -118,10 +343,11 @@ while (true) {
     $_SERVER["SERVER_PORT"] = "80";
   }
   unset($__phpx_host);
-  // P1-B integration parity with the one-shot bootstrap: populate $_POST for
-  // urlencoded form submissions (CLI SAPI never does). Multipart stays
-  // unsupported; raw bytes remain available via phpx_input().
+  // Multipart/form-data (RC track): parsed in PHP so $_POST/$_FILES work
+  // under CLI SAPI, same as the one-shot bootstrap. move_uploaded_file() /
+  // is_uploaded_file() still return false under CLI (documented limit).
   $__phpx_ctype = strtolower(trim(explode(";", isset($headers["content-type"]) ? (string)$headers["content-type"] : (isset($headers["Content-Type"]) ? (string)$headers["Content-Type"] : ""))[0]));
+  $__phpx_full_ctype = isset($headers["content-type"]) ? (string)$headers["content-type"] : (isset($headers["Content-Type"]) ? (string)$headers["Content-Type"] : "");
   if ($__phpx_ctype === "application/x-www-form-urlencoded" && $bodyStr !== "") {
     parse_str($bodyStr, $__phpx_post);
     if (is_array($__phpx_post)) {
@@ -129,8 +355,10 @@ while (true) {
       $_REQUEST = array_merge($_REQUEST, $__phpx_post);
     }
     unset($__phpx_post);
+  } elseif ($__phpx_ctype === "multipart/form-data" && $bodyStr !== "") {
+    phpx_parse_multipart($bodyStr, $__phpx_full_ctype);
   }
-  unset($__phpx_ctype);
+  unset($__phpx_ctype, $__phpx_full_ctype);
 
   putenv("PHPX_REQUEST_ID=" . $rid);
   $_SERVER["PHPX_REQUEST_ID"] = $rid;
