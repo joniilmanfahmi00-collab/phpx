@@ -70,6 +70,12 @@ fn measure_base_rss_bytes() -> u64 {
 
 const MB: u64 = 1024 * 1024;
 
+// Guardian recycle latency budget: the hog request itself may take up to the
+// execution timeout (10s) and the replacement spawn up to the startup timeout
+// (15s); 5s slack for loaded CI. Enforcement is synchronous at request
+// completion, so this is normally far below the cap.
+const GUARDIAN_RECYCLE_MAX_MS: u64 = 30_000;
+
 #[test]
 fn soft_limit_recycles_gracefully_with_controlled_workload() {
     // P0-C acceptance: soft-threshold recycling with a controlled memory
@@ -78,6 +84,7 @@ fn soft_limit_recycles_gracefully_with_controlled_workload() {
     let mut cfg = guardian_config(1, 0, 0);
     cfg.memory_soft_bytes = base + 16 * MB;
     let pool = PersistentPool::new(cfg).expect("pool must start");
+    let t0 = std::time::Instant::now();
     let resp = pool.execute(&mem_req("soft-1", 64)).expect("execute");
     assert_eq!(
         resp.status,
@@ -106,6 +113,11 @@ fn soft_limit_recycles_gracefully_with_controlled_workload() {
         .execute(&req_for("soft-after", &fixture_root(), "index.php"))
         .unwrap();
     assert_eq!(plain.status, 200);
+    let elapsed_ms = t0.elapsed().as_millis() as u64;
+    assert!(
+        elapsed_ms <= GUARDIAN_RECYCLE_MAX_MS,
+        "hog->recycle->serve took {elapsed_ms}ms, exceeds {GUARDIAN_RECYCLE_MAX_MS}ms"
+    );
     // Metrics expose the trigger with its threshold label.
     let text = pool.prometheus_text();
     assert!(

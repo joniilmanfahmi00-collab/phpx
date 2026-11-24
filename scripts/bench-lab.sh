@@ -7,7 +7,10 @@
 # Usage: ./scripts/bench-lab.sh [--port 18082] [--requests 200] [--concurrency 10]
 #   [--mode one-shot|persistent] [--profile debug|release] [--backend phpx|php-builtin]
 #   [--workers 4] [--out-dir data/bench/<auto>]
-# Comparability contract: same host, same PHP, same fixture, same mix.
+#   [--max-failures N] [--min-rps R] [--max-p95-ms MS]
+# Thresholds (RC-track acceptance gates, optional): when set, the script exits
+# 1 on violation. CI enforces --max-failures 0 only; rps/p95 stay manual RC
+# inputs (machine-dependent, never a cross-machine SLA).
 set -euo pipefail
 PORT=18082
 REQS=200
@@ -17,6 +20,9 @@ PROFILE="debug"
 BACKEND="phpx"
 WORKERS=4
 OUTDIR=""
+MAXFAIL=""
+MINRPS=""
+MAXP95=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; shift 2;;
@@ -27,8 +33,11 @@ while [ $# -gt 0 ]; do
     --backend) BACKEND="$2"; shift 2;;
     --workers) WORKERS="$2"; shift 2;;
     --out-dir) OUTDIR="$2"; shift 2;;
+    --max-failures) MAXFAIL="$2"; shift 2;;
+    --min-rps) MINRPS="$2"; shift 2;;
+    --max-p95-ms) MAXP95="$2"; shift 2;;
     --help|-h)
-      echo "Usage: bench-lab.sh [--port N] [--requests N] [--concurrency N] [--mode one-shot|persistent] [--profile debug|release] [--backend phpx|php-builtin] [--workers N] [--out-dir DIR]";
+      echo "Usage: bench-lab.sh [--port N] [--requests N] [--concurrency N] [--mode one-shot|persistent] [--profile debug|release] [--backend phpx|php-builtin] [--workers N] [--out-dir DIR] [--max-failures N] [--min-rps R] [--max-p95-ms MS]";
       exit 0;;
     *) echo "unknown arg $1"; exit 2;;
   esac
@@ -178,5 +187,22 @@ echo "[bench-lab] failures=$FAILURES rps=$RPS results=$OUTDIR/summary.json (NOT 
 if [ "$BACKEND" = "phpx" ]; then
   curl -sf "http://127.0.0.1:$PORT/metrics" > "$OUTDIR/metrics.txt" 2>/dev/null || true
 fi
+# Threshold gates (exit 1 on violation, after the server is stopped below).
+GATE_FAIL=""
+if [ -n "$MAXFAIL" ] && [ "$MAXFAIL" != "-1" ] && [ "$FAILURES" -gt "$MAXFAIL" ]; then
+  GATE_FAIL="failures=$FAILURES exceeds --max-failures $MAXFAIL"
+fi
+if [ -n "$MINRPS" ]; then
+  RPS_OK=$(BL_RPS="$RPS" BL_MIN="$MINRPS" php -r 'echo ((float)getenv("BL_RPS") >= (float)getenv("BL_MIN")) ? "1" : "0";')
+  if [ "$RPS_OK" != "1" ]; then GATE_FAIL="rps=$RPS below --min-rps $MINRPS${GATE_FAIL:+; $GATE_FAIL}"; fi
+fi
+if [ -n "$MAXP95" ]; then
+  P95_OK=$(BL_SUM="$OUTDIR/summary.json" BL_MAX="$MAXP95" php -r '$s=json_decode(@file_get_contents(getenv("BL_SUM")),true); $p=$s["warm"]["p95_ms"]??null; echo ($p!==null && $p<=(float)getenv("BL_MAX"))?"1":"0";')
+  if [ "$P95_OK" != "1" ]; then GATE_FAIL="warm p95 exceeds --max-p95-ms $MAXP95${GATE_FAIL:+; $GATE_FAIL}"; fi
+fi
 kill "$SRV" 2>/dev/null || true
 trap - EXIT
+if [ -n "$GATE_FAIL" ]; then
+  echo "[bench-lab] THRESHOLD VIOLATION: $GATE_FAIL"
+  exit 1
+fi

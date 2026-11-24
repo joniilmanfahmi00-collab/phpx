@@ -61,7 +61,7 @@ jobs:
           bash scripts/setup-woocommerce-smoke.sh
       # P1-B: laboratory methodology smoke (debug, small N; numbers are not claims).
       # (P1-A soak gate runs inside `cargo test --workspace` below.)
-      - run: bash scripts/bench-lab.sh --requests 60 --concurrency 4 --mode one-shot --out-dir /tmp/bench-lab-ci
+      - run: bash scripts/bench-lab.sh --requests 60 --concurrency 4 --mode one-shot --max-failures 0 --out-dir /tmp/bench-lab-ci
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --workspace

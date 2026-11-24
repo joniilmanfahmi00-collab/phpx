@@ -16,6 +16,20 @@ fn req_for(id: &str, entry: &str) -> PhpRequest {
     r
 }
 
+// RC-track acceptance thresholds (single-node dev scope; generous for shared
+// CI runners so they catch regressions, not machine noise). Tied to the
+// pool config below: startup_timeout 15s, execution_timeout 10s.
+const STARTUP_BUDGET_MS: u64 = 15_000;
+// Detection -> restart initiation: kill issued promptly after EOF discovery.
+const RECOVERY_DETECTION_TO_RESTART_MAX_MS: u64 = 5_000;
+// Restart initiation -> replacement ready: bounded by the startup budget + slack.
+const RECOVERY_RESTART_TO_READY_MAX_MS: u64 = STARTUP_BUDGET_MS + 2_000;
+// End to end per incident: startup budget + detection/exchange slack.
+const RECOVERY_TOTAL_MAX_MS: u64 = STARTUP_BUDGET_MS + 5_000;
+// User-observable recovery: kill -> failing request -> first 200 on the
+// replacement (total + one execution budget).
+const TIME_TO_FIRST_SUCCESS_MAX_MS: u64 = RECOVERY_TOTAL_MAX_MS + 10_000;
+
 fn persistent_config(workers: u32) -> PersistentPoolConfig {
     PersistentPoolConfig {
         worker_count: workers,
@@ -100,7 +114,18 @@ fn recovery_timeline_reports_detection_to_ready() {
     let r2r = rec.restart_to_ready_ms.expect("replacement ready");
     let total = rec.total_ms.expect("total measured");
     assert_eq!(total, d2r + r2r, "legs must add to the total: {rec:?}");
-    assert!(total < 30_000, "recovery took too long: {rec:?}");
+    assert!(
+        d2r <= RECOVERY_DETECTION_TO_RESTART_MAX_MS,
+        "detection->restart {d2r}ms exceeds {RECOVERY_DETECTION_TO_RESTART_MAX_MS}ms: {rec:?}"
+    );
+    assert!(
+        r2r <= RECOVERY_RESTART_TO_READY_MAX_MS,
+        "restart->ready {r2r}ms exceeds {RECOVERY_RESTART_TO_READY_MAX_MS}ms: {rec:?}"
+    );
+    assert!(
+        total <= RECOVERY_TOTAL_MAX_MS,
+        "recovery total {total}ms exceeds {RECOVERY_TOTAL_MAX_MS}ms: {rec:?}"
+    );
     // Next request succeeds: time-to-first-success follows readiness.
     let good = pool.execute(&req_for("rec-2", "index.php")).unwrap();
     assert_eq!(good.status, 200);
@@ -108,6 +133,32 @@ fn recovery_timeline_reports_detection_to_ready() {
     assert!(
         text.contains("phpx_worker_last_recovery_duration_seconds{worker_id=\"0\"}"),
         "{text}"
+    );
+}
+
+#[test]
+fn time_to_first_success_after_idle_crash_within_budget() {
+    // User-observable recovery: kill the idle worker, then measure wall time
+    // from the kill to the first 200 served by the replacement (the request
+    // in between maps to 500 by design). Must fit total + one execution
+    // budget; proves recovery is not just internally recorded but served.
+    let pool = PersistentPool::new(persistent_config(1)).expect("pool must start");
+    let good = pool.execute(&req_for("tts-0", "index.php")).unwrap();
+    assert_eq!(good.status, 200);
+    let pid = pool.worker_snapshots()[0].pid.expect("worker has a pid");
+    let t0 = Instant::now();
+    kill_pid(pid);
+    std::thread::sleep(Duration::from_millis(300));
+    let bad = pool
+        .execute(&req_for("tts-1", "index.php"))
+        .expect("crash maps to Ok(500), not transport Err");
+    assert_eq!(bad.status, 500);
+    let good = pool.execute(&req_for("tts-2", "index.php")).unwrap();
+    assert_eq!(good.status, 200);
+    let elapsed_ms = t0.elapsed().as_millis() as u64;
+    assert!(
+        elapsed_ms <= TIME_TO_FIRST_SUCCESS_MAX_MS,
+        "kill->first-200 took {elapsed_ms}ms, exceeds {TIME_TO_FIRST_SUCCESS_MAX_MS}ms"
     );
 }
 

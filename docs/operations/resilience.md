@@ -35,6 +35,28 @@ reported separately and must satisfy `total == detection→restart +
 restart→ready`, with total inside the startup budget. Time-to-first-success
 is proven by the request after recovery returning 200.
 
+## Acceptance thresholds (RC-track, enforced)
+
+Single-node dev scope; generous caps so they catch regressions, not machine
+noise. Recovery budgets derive from the pool config in the tests
+(`startup_timeout` 15s, `execution_timeout` 10s).
+
+| Signal | Threshold | Enforced by |
+|---|---|---|
+| Recovery detection -> restart initiation | <= 5_000 ms | `p1a_resilience::recovery_timeline_reports_detection_to_ready` |
+| Recovery restart -> replacement ready | <= 17_000 ms (15s startup + 2s slack) | same test |
+| Recovery total (detection -> ready) | <= 20_000 ms (15s + 5s slack) | same test |
+| Kill -> failing 500 -> first 200 on replacement | <= 30_000 ms (total + one 10s execution budget) | `p1a_resilience::time_to_first_success_after_idle_crash_within_budget` |
+| Guardian soft recycle: hog -> recycle -> next 200 | <= 30_000 ms (10s exec + 15s startup + 5s slack) | `persistent::soft_limit_recycles_gracefully...` |
+| Crash-loop circuit fail-fast | < 4_000 ms | `p1a_resilience::crash_loop_...` (existing) |
+| Drain reject of new work | < 4_000 ms | `p1a_resilience::drain_with_in_flight_...` (existing) |
+| Short soak conservation (120 req, crash every 10th) | completed + failed == total, restarts == 12, all Ready, no Failed | `p1a_resilience::short_soak_...` (existing) |
+| Bench-lab smoke (CI) | failures == 0 | `bench-lab.sh --max-failures 0` (rps/p95 stay manual RC inputs, never cross-machine SLA) |
+
+Long-soak RSS slope stays observed-only for now (60-min archive: +3.6
+KB/min, flat band 324 KB): needs 6h/24h repeats before a slope cap can be set
+without flaking.
+
 ## Soak
 
 - CI gate (repeatable): `p1a: short_soak_mixed_workload_stays_healthy`

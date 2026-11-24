@@ -20,6 +20,8 @@ What it records: gateway build (`cargo build -p phpx-cli`), serves `examples/van
 ## Pass bar (RC)
 
 - No cross-contamination, crash + drain + 503 paths exercised (M4/M7 suites green).
+- Recovery/guardian/soak thresholds in `resilience.md` green (per-leg caps, kill->first-200, recycle latency, conservation).
+- Bench-lab smoke: `failures == 0` (`--max-failures 0`); rps/p95 recorded, never an absolute SLA.
 - Claims are deltas vs checked-in baseline, never absolute SLA. Raw logs kept 30 days.
 ## Baseline lock (RC)
 

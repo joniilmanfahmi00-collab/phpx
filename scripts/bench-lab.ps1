@@ -2,6 +2,9 @@
 # Cara pakai: .\scripts\bench-lab.ps1 [-Port 18082] [-Requests 200] [-Concurrency 10]
 #   [-Mode one-shot|persistent] [-Profile debug|release] [-Backend phpx|php-builtin]
 #   [-Workers 4] [-OutDir data/bench/<auto>]
+#   [-MaxFailures N] [-MinRps R] [-MaxP95Ms MS]
+# Threshold opsional (RC-track): throw mun violated. CI ngan --max-failures 0;
+# rps/p95 input RC manual (gumantung mesin, lain SLA lintas-mesin).
 param(
   [int]$Port = 18082,
   [int]$Requests = 200,
@@ -10,7 +13,10 @@ param(
   [string]$Profile = "debug",
   [string]$Backend = "phpx",
   [int]$Workers = 4,
-  [string]$OutDir = ""
+  [string]$OutDir = "",
+  [int]$MaxFailures = -1,
+  [double]$MinRps = -1,
+  [double]$MaxP95Ms = -1
 )
 $ErrorActionPreference = "Stop"
 if ($Mode -notin @("one-shot", "persistent")) { throw "Mode must be one-shot or persistent" }
@@ -170,6 +176,11 @@ try {
   if ($Backend -eq "phpx") {
     try { Invoke-WebRequest -Uri "http://127.0.0.1:$Port/metrics" -UseBasicParsing -TimeoutSec 5 | Select-Object -ExpandProperty Content | Set-Content (Join-Path $OutDir "metrics.txt") } catch {}
   }
+  $GateFail = @()
+  if ($MaxFailures -ge 0 -and $Fails -gt $MaxFailures) { $GateFail += "failures=$Fails exceeds -MaxFailures $MaxFailures" }
+  if ($MinRps -ge 0 -and $Rps -lt $MinRps) { $GateFail += "rps=$Rps below -MinRps $MinRps" }
+  if ($MaxP95Ms -ge 0 -and $Warm.n -gt 0 -and $Warm.p95_ms -gt $MaxP95Ms) { $GateFail += "warm p95=$($Warm.p95_ms)ms exceeds -MaxP95Ms $MaxP95Ms" }
+  if ($GateFail.Count -gt 0) { throw ("[bench-lab] THRESHOLD VIOLATION: " + ($GateFail -join "; ")) }
 } finally {
   Stop-Process -Id $Srv.Id -Force -ErrorAction SilentlyContinue
 }

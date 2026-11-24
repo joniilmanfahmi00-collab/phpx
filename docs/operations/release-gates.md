@@ -43,8 +43,11 @@ does not block Beta — the boundary is tested and documented.
   (one-shot 3.86 / persistent 5.77 / php-builtin 6.09 rps, 200/10) plus a
   methodology for repeats — but no multi-run reproducibility record or
   load/soak SLOs are defined yet.
-- Recovery and memory behavior are measured per-incident but have no
-  acceptance thresholds yet (only observed values).
+- Recovery and memory behavior have acceptance thresholds now (see
+  `resilience.md`: per-leg recovery caps, kill->first-200 cap, guardian
+  recycle cap, circuit/drain fail-fast caps, soak conservation, bench-lab
+  `--max-failures 0` in CI). Multi-run reproducibility records and load/soak
+  SLOs (rps/p95 floors, RSS slope caps) are still future work.
 - Compatibility matrix marks uploads/`Set-Cookie` round-trip as explicit SAPI
   limits with pinned tests; sessions/JSON/forms/comments/REST are covered on
   real apps.
