@@ -66,6 +66,25 @@ Caveat: mesin dev Windows (spawn process mahal), single node, teu aya SLA.
 Dimensi séjén (reliability, soak, drain/restart timing) aya di P1-A
 (`docs/operations/resilience.md`), lain di tabel ieu.
 
+## Bench repeat (reproducibility record, NOT an SLA)
+
+`scripts/bench-repeat.sh` / `bench-repeat.ps1` jalan-keun `bench-lab.sh` N kali
+(config sami persis) terus agregat `run-i/summary.json` jadi
+`reproducibility.json` (mean/min/max/stdev/CV per metric) + gate
+`--max-cv-pct` (default 30) kanggo rps + warm p50/p95. `cold_ms` dilaporkeun
+tanpa gate (spawn noise by design). Tiap run ogé maksa `--max-failures`
+(default 0).
+
+```
+bash scripts/bench-repeat.sh --runs 3 --requests 200 --concurrency 10 \
+  --mode persistent --profile release --out-dir data/bench/<rc-record> [--max-cv-pct 30]
+```
+
+Bukti metodologi 2026-11-24 (mesin dev, debug, one-shot, N leutik 2x20 — BUKAN
+rekor RC): rps CV 2.33%, warm p50 CV 6.61%, p95 CV 16.93% → PASS gate 30%.
+Rekor RC kudu: release + workload dikonci (`baseline.md`: 3 runs, 200 req,
+concurrency 10) + hardware RC + arsip `reproducibility.json` 30 poé.
+
 ## Soak-long
 
 - scripts/soak-long.sh / soak-long-windows.ps1: sample RSS tiap 60 dtk ka CSV, slope KB/menit. Gateway harus flat, PHP one-shot direclaim OS.

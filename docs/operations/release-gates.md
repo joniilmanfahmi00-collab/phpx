@@ -41,8 +41,11 @@ does not block Beta — the boundary is tested and documented.
 
 - Benchmarks are developer-machine, single-node; P1-B lab adds release numbers
   (one-shot 3.86 / persistent 5.77 / php-builtin 6.09 rps, 200/10) plus a
-  methodology for repeats — but no multi-run reproducibility record or
-  load/soak SLOs are defined yet.
+  methodology for repeats: `bench-repeat.sh/.ps1` aggregates N runs into
+  `reproducibility.json` with CV gates (proof on dev box: rps CV 2.33%, p95
+  CV 16.93% over 2x20 debug runs — methodology only, not the RC record).
+  The RC record itself (release, locked 3x200/10 workload, RC hardware) and
+  load/soak SLOs are still future work.
 - Recovery and memory behavior have acceptance thresholds now (see
   `resilience.md`: per-leg recovery caps, kill->first-200 cap, guardian
   recycle cap, circuit/drain fail-fast caps, soak conservation, bench-lab

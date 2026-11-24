@@ -10,6 +10,9 @@
 ## Locked workload
 
 - bench: 200 req, concurrency 10, single-node 127.0.0.1 (default RC)
+- bench-repeat (reproducibility record): 3 runs bench config sami persis,
+  gate `--max-failures 0 --max-cv-pct 30` (rps/p50/p95), arsip
+  `reproducibility.json` + 3x `summary.json` 30 poé
 - soak-short: 2000 req, concurrency 8 (smoke stability)
 - soak-long: 60 menit, concurrency 8, sample RSS tiap 60 detik (slope KB per menit)
 - compare: workload sami persis phpx vs php-builtin vs php-fpm lamun aya
