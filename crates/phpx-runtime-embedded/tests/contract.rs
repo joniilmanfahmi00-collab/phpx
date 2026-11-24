@@ -139,3 +139,75 @@ fn no_arbitrary_concurrent_entry() {
         .count();
     assert_eq!(wins, 1);
 }
+
+#[test]
+fn extension_matrix_contract() {
+    assert_eq!(emb::ext::REQUIRED_EXTENSIONS.len(), 11);
+    let r = emb::ext::ExtReport::probe();
+    assert!(
+        r.present.contains(&"json".to_string()),
+        "live probe must parse the local php: {}",
+        r.note
+    );
+    for ext in emb::ext::REQUIRED_EXTENSIONS {
+        assert!(
+            r.present.contains(&ext.to_string()) || r.missing.contains(&ext.to_string()),
+            "{ext} must be classified present or missing"
+        );
+    }
+}
+
+#[test]
+fn isolation_scope_contract() {
+    let mut s = emb::isolation::IsolationScope::open("m6-iso");
+    s.track(32);
+    s.release(32);
+    let receipt = s.seal().expect("clean seal");
+    assert!(receipt.clean);
+    let mut leaky = emb::isolation::IsolationScope::open("m6-leak");
+    leaky.track(8);
+    assert!(leaky.seal().is_err());
+}
+
+#[test]
+fn engine_lifecycle_contract() {
+    use emb::engine::{EngineEvent, EnginePhase};
+    assert_eq!(
+        EnginePhase::Cold.transition(EngineEvent::InitStart),
+        Some(EnginePhase::Initializing)
+    );
+    assert_eq!(
+        EnginePhase::Ready.transition(EngineEvent::Enter),
+        Some(EnginePhase::Serving)
+    );
+    assert!(EnginePhase::Ready.can_enter());
+    assert!(!EnginePhase::Serving.can_enter());
+    assert_eq!(EnginePhase::Cold.transition(EngineEvent::Enter), None);
+}
+
+#[test]
+fn promotion_gates_assess_fail_closed() {
+    let gates = emb::gates::assess();
+    let ids: Vec<&str> = gates.iter().map(|g| g.id).collect();
+    assert_eq!(
+        ids,
+        vec![
+            "abi_pin",
+            "native_link",
+            "execution_domain",
+            "ownership",
+            "containment",
+            "extensions",
+            "isolation",
+            "compat_parity",
+            "stability"
+        ]
+    );
+    for g in &gates {
+        assert!(!g.evidence.is_empty(), "{} needs evidence", g.id);
+    }
+    assert!(
+        !emb::gates::available(),
+        "promotion stays fail-closed until every gate passes"
+    );
+}

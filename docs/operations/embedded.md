@@ -1,13 +1,35 @@
 # PHPX embedded runtime (M6 experimental)
 
-Status: M6.1 stub DONE - capability reporting + single-entry domain + shared contract tests.
-Native php-embed linking deferred (needs Linux + php-embed dev libs + ABI pin).
+Status: M6 gates partially proven — ABI pin, execution domain, ownership,
+containment DONE and unit-proven; extension audit live; isolation lifecycle,
+engine lifecycle and gate assessor modeled; compat parity and stability HOLD
+until a live engine executes. `available` is derived from the gates
+(`gates::available()`, fail-closed) instead of a literal false.
 
 Process Runtime stays the active backend. Embedded is opt-in and never default.
 
+## Promotion gates (P2, assessor `gates::assess()`)
+
+| Gate | Status | Evidence |
+|---|---|---|
+| `abi_pin` — supported PHP build + ABI matrix | DONE | `abi::AbiPin` pin + matrix tests (8.3/8.4/8.5 NTS non-debug accept; ZTS/Debug/older reject) |
+| `native_link` — real PHP Embed SAPI link | HOLD (stub) / DONE when linked | `build.rs` links libphp only on Linux + `PHPX_EMBED_LINK=1`; WSL Debian gate 2026-11-19 green linked |
+| `execution_domain` — controlled domain + thread constraints | DONE | Single-entry `EmbeddedDomain`, 8-thread race = exactly 1 winner, panic poisons gracefully |
+| `ownership` — ownership/lifetime rules across the C ABI | DONE | 5 rules + `RequestScope` tracker, enforced by construction |
+| `containment` — failure containment strategy | DONE | Validate-then-enter-then-cap order, exact 16 MiB cap, junk rejected before entry |
+| `extensions` — extension compatibility tests | LIVE (machine-dependent) | `ext::ExtReport::probe()` audits live `php -m` vs the 11-extension doctor matrix; HOLD lists the missing extensions |
+| `isolation` — request state isolation tests | HOLD | `IsolationScope` lifecycle modeled + unit-proven (clean seal vs leak fail-closed); live Zend executor reset per request unproven without a hosted engine |
+| `compat_parity` — parity on the compatibility suite | HOLD | Subsets mirror M4 fixtures with per-subset blockers (table below); no subset executes through an engine yet |
+| `stability` — stability evidence, never throughput alone | HOLD | No archived linked-engine soak (consecutive clean entries + RSS trend per the soak-long convention) |
+
+`available()` is true only when every gate passes — the mechanical promotion
+condition. `runtime inspect --json` exposes the full `gates` array; `phpx
+doctor` keeps its informational php-embed checks.
+
 ## Capabilities
 
-- available=false in this build (no native lib linked).
+- available=false until every promotion gate passes (derived from
+  `gates::available()`, fail-closed — not a literal).
 - single_threaded=true, max_concurrent_entries=1.
 - nts_only=true (ZTS not claimed).
 - Concurrent entry is rejected with an actionable error, never queued.
@@ -19,19 +41,37 @@ Validation still rejects mode=embedded without enabled=true.
 
 ## CLI
 
-- runtime list shows embedded status experimental-disabled or experimental-enabled plus available=false.
-- runtime inspect includes an embedded object with enabled, available, single_threaded, max_concurrent_entries.
+- runtime list shows embedded status experimental-disabled or experimental-enabled plus derived available/linked.
+- runtime inspect includes an embedded object with enabled, available, single_threaded, max_concurrent_entries, abi pin, and the full `gates` array (per-gate pass + evidence).
 - Execution through embedded is not wired yet; requests keep using the process backend.
+
+## Engine lifecycle (P2 gate model, DONE)
+
+Module `engine`: Cold → Initializing → Ready → Serving → Draining/Shutdown,
+Failed terminal except Shutdown. Pure transition table, unit-tested. Hosting
+a live engine stays closed until the gates above pass; the machine is the
+contract the live engine will obey (only Ready enters, only Serving exits).
+
+## Isolation lifecycle (P2 gate model, DONE)
+
+Module `isolation`: one `IsolationScope` per request — track every byte
+handed to the engine, release everything before the next entry, seal the
+boundary. A seal over retained bytes fails closed naming the leak. The live
+Zend executor reset plugs into this lifecycle; the gate stays HOLD until a
+hosted engine proves per-request reset.
+
+## Extension compatibility (P2 gate, LIVE)
+
+Module `ext`: `REQUIRED_EXTENSIONS` (the 11-extension doctor matrix) +
+`ExtReport::audit()` over `php -m` output + `ExtReport::probe()` for the
+live listing. The assessor marks the gate DONE when the local `php -m`
+satisfies the matrix and HOLD naming the missing extensions otherwise.
 
 ## Deferred (later M6)
 
-- Native php-embed build and linking on Linux with pinned headers and ABI matrix.
-- Narrow C ABI bridge with memory ownership and lifecycle rules.
-- NTS and ZTS constraint tests plus crash containment tests.
-- Laravel and WordPress compatibility subsets through embedded.
-- PHPX Redis queue/cache drivers share the same contract suites as the
-  memory/sqlite/filesystem drivers; app-native Redis via WordPress and
-  Laravel keeps working without PHPX.
+- Native php-embed link in CI (gate `native_link`; manual WSL gate proven linked-green, CI stays stub until php-dev headers are available on the runner).
+- Live C ABI bridge execution (`startup`/`execute_once`/`shutdown` against a hosted engine; `call_stub` keeps failing closed until then).
+- Laravel and WordPress compatibility subsets through embedded (gate `compat_parity`; per-subset blockers in the table below).
 
 
 ## ABI pin (M6.2 DONE)

@@ -622,7 +622,7 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
                         "protocol_version": phpx_runtime::PROTOCOL_VERSION,
                         "runtimes": [
                             { "name": "process", "status": if cfg.runtime.mode == "process" { "active" } else { "available" }, "note": "bounded pool (P0-B: one-shot or persistent supervised workers)" },
-                            { "name": "embedded", "status": if cfg.runtime.embedded.as_ref().is_some_and(|e| e.enabled) { "experimental-enabled" } else { "experimental-disabled" }, "available": false, "linked": phpx_runtime_embedded::is_build_linked(), "note": "M6 ABI pin: php-embed not linked for execution; process fallback active", "abi": phpx_runtime_embedded::abi::AbiPin::pinned() }
+                            { "name": "embedded", "status": if cfg.runtime.embedded.as_ref().is_some_and(|e| e.enabled) { "experimental-enabled" } else { "experimental-disabled" }, "available": phpx_runtime_embedded::gates::available(), "linked": phpx_runtime_embedded::is_build_linked(), "note": "M6 promotion gates (fail-closed); process fallback active", "abi": phpx_runtime_embedded::abi::AbiPin::pinned(), "gates": phpx_runtime_embedded::gates::assess() }
                         ],
                         "php_target": cfg.runtime.php_version,
                         "php_actual": actual_php,
@@ -676,7 +676,7 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
                         "docroot": format!("{}/{}", cfg.application.root, cfg.application.document_root),
                         "entrypoint": cfg.application.entrypoint,
                         "tls": cfg.server.tls,
-                        "embedded": { "enabled": cfg.runtime.embedded.as_ref().is_some_and(|e| e.enabled), "available": false, "linked": phpx_runtime_embedded::is_build_linked(), "single_threaded": true, "max_concurrent_entries": 1, "abi": phpx_runtime_embedded::abi::AbiPin::pinned() },
+                        "embedded": { "enabled": cfg.runtime.embedded.as_ref().is_some_and(|e| e.enabled), "available": phpx_runtime_embedded::gates::available(), "linked": phpx_runtime_embedded::is_build_linked(), "single_threaded": true, "max_concurrent_entries": 1, "abi": phpx_runtime_embedded::abi::AbiPin::pinned(), "gates": phpx_runtime_embedded::gates::assess() },
                     })
                 );
             } else {

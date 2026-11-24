@@ -12,6 +12,10 @@ pub mod abi;
 pub mod bridge;
 pub mod compat;
 pub mod containment;
+pub mod engine;
+pub mod ext;
+pub mod gates;
+pub mod isolation;
 pub mod link;
 pub mod ownership;
 
@@ -40,7 +44,8 @@ pub struct EmbeddedCapabilities {
 impl EmbeddedCapabilities {
     pub fn report(enabled: bool) -> Self {
         Self {
-            available: false,
+            // Fail-closed: true only when every promotion gate passes.
+            available: crate::gates::available(),
             enabled,
             single_threaded: true,
             max_concurrent_entries: 1,
