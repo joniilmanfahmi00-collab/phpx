@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "PHPX M5 queue drivers: bounded memory + durable SQLite, retries/backoff/dead-letter"
+description = "PHPX M5 queue drivers: bounded memory + durable SQLite + shared Redis, retries/backoff/dead-letter"
 
 [dependencies]
 phpx-core.workspace = true
@@ -12,6 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
+redis = "1.8.3"
 
 [dev-dependencies]
 tempfile = "3"

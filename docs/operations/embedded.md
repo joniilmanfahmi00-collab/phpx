@@ -29,7 +29,9 @@ Validation still rejects mode=embedded without enabled=true.
 - Narrow C ABI bridge with memory ownership and lifecycle rules.
 - NTS and ZTS constraint tests plus crash containment tests.
 - Laravel and WordPress compatibility subsets through embedded.
-- PHPX Redis driver stays deferred; app-native Redis via WordPress and Laravel keeps working without PHPX.
+- PHPX Redis queue/cache drivers share the same contract suites as the
+  memory/sqlite/filesystem drivers; app-native Redis via WordPress and
+  Laravel keeps working without PHPX.
 
 
 ## ABI pin (M6.2 DONE)

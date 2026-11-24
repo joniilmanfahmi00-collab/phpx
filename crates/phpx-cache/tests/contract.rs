@@ -1,4 +1,33 @@
-use phpx_cache::{CacheDriver, FilesystemCache, MemoryCache};
+use phpx_cache::{CacheDriver, FilesystemCache, MemoryCache, RedisCache};
+
+fn redis_url() -> Option<String> {
+    std::env::var("PHPX_REDIS_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+fn redis_cache() -> Option<RedisCache> {
+    let url = redis_url()?;
+    let ns = format!("test-{}-{}", std::process::id(), ns_next());
+    let c = RedisCache::open(&url, &ns, 100, 1024 * 1024).expect("open redis cache");
+    c.flush_namespace().expect("flush redis namespace");
+    Some(c)
+}
+
+fn ns_next() -> u64 {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+fn require_redis() -> Option<RedisCache> {
+    match redis_cache() {
+        Some(c) => Some(c),
+        None => {
+            eprintln!("SKIP redis contract: set PHPX_REDIS_URL (e.g. redis://127.0.0.1:6379)");
+            None
+        }
+    }
+}
 
 fn memory() -> MemoryCache {
     MemoryCache::new(100, 1024 * 1024)
@@ -69,4 +98,65 @@ fn rejects_bad_keys() {
     let c = memory();
     assert!(c.set("", b"x", 0).is_err());
     assert!(c.set("a/b", b"x", 0).is_err());
+}
+
+#[test]
+fn redis_set_get() {
+    let Some(c) = require_redis() else { return };
+    assert_eq!(c.stats().expect("stats").driver, "redis");
+    contract_set_get(&c);
+    c.flush_namespace().expect("flush");
+}
+
+#[test]
+fn redis_ttl_delete_clear() {
+    let Some(c) = require_redis() else { return };
+    contract_ttl_delete_clear(&c);
+    c.flush_namespace().expect("flush");
+}
+
+#[test]
+fn redis_ttl_entry_expires() {
+    let Some(c) = require_redis() else { return };
+    c.set("short", b"v", 1).expect("set ttl");
+    assert_eq!(c.get("short").expect("get"), Some(b"v".to_vec()));
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    assert_eq!(
+        c.get("short").expect("get2"),
+        None,
+        "TTL must expire the entry"
+    );
+    c.flush_namespace().expect("flush");
+}
+
+#[test]
+fn redis_namespaces_are_isolated() {
+    let url = match redis_url() {
+        Some(u) => u,
+        None => {
+            eprintln!("SKIP redis contract: set PHPX_REDIS_URL (e.g. redis://127.0.0.1:6379)");
+            return;
+        }
+    };
+    let a = RedisCache::open(
+        &url,
+        &format!("iso-a-{}-{}", std::process::id(), ns_next()),
+        100,
+        1024 * 1024,
+    )
+    .expect("open a");
+    let b = RedisCache::open(
+        &url,
+        &format!("iso-b-{}-{}", std::process::id(), ns_next()),
+        100,
+        1024 * 1024,
+    )
+    .expect("open b");
+    a.flush_namespace().expect("flush a");
+    b.flush_namespace().expect("flush b");
+    a.set("k", b"av", 0).expect("set a");
+    assert_eq!(b.get("k").expect("get b"), None, "B must not see A's key");
+    assert_eq!(a.get("k").expect("get a"), Some(b"av".to_vec()));
+    a.flush_namespace().expect("flush a");
+    b.flush_namespace().expect("flush b");
 }

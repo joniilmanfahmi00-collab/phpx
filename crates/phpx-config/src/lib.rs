@@ -121,6 +121,10 @@ pub struct QueueConfig {
     #[serde(default = "default_queue_driver")]
     pub driver: String,
     pub database: Option<String>,
+    /// Redis server URL when driver=redis (e.g. redis://127.0.0.1:6379).
+    /// `PHPX_REDIS_URL` env also works (CLI + open_queue fallback).
+    #[serde(default)]
+    pub url: Option<String>,
     #[serde(default = "default_queue_workers")]
     pub workers: u32,
 }
@@ -168,6 +172,10 @@ pub struct CacheConfig {
     /// Filesystem dir when driver=filesystem (e.g. ./data/cache).
     #[serde(default)]
     pub dir: Option<String>,
+    /// Redis server URL when driver=redis (e.g. redis://127.0.0.1:6379).
+    /// `PHPX_REDIS_URL` env also works (CLI + open_cache fallback).
+    #[serde(default)]
+    pub url: Option<String>,
     /// Max entries (1-100000). None = 1000.
     #[serde(default)]
     pub max_entries: Option<usize>,
@@ -546,9 +554,9 @@ impl PhpxConfig {
         }
         if let Some(queue) = &self.queue {
             let d = queue.driver.to_ascii_lowercase();
-            if d != "memory" && d != "sqlite" {
+            if d != "memory" && d != "sqlite" && d != "redis" {
                 return Err(phpx_core::PhpxError::Config(format!(
-                    "queue.driver must be memory or sqlite, got {} (PHPX Redis deferred; app-native Redis via WordPress/Laravel REDIS_HOST tetap jalan tanpa PHPX driver)",
+                    "queue.driver must be memory, sqlite or redis, got {}",
                     queue.driver
                 )));
             }
@@ -562,6 +570,19 @@ impl PhpxConfig {
                     Some(db) if !db.trim().is_empty() => {}
                     _ => return Err(phpx_core::PhpxError::Config(
                         "queue.driver=sqlite requires [queue] database path (e.g. ./data/queue.db)"
+                            .to_string(),
+                    )),
+                }
+            }
+            if d == "redis" {
+                let env_ok = std::env::var("PHPX_REDIS_URL")
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false);
+                match &queue.url {
+                    Some(u) if !u.trim().is_empty() => {}
+                    _ if env_ok => {}
+                    _ => return Err(phpx_core::PhpxError::Config(
+                        "queue.driver=redis requires [queue] url (e.g. redis://127.0.0.1:6379) or PHPX_REDIS_URL env"
                             .to_string(),
                     )),
                 }
@@ -608,9 +629,9 @@ impl PhpxConfig {
         }
         if let Some(cache) = &self.cache {
             let d = cache.driver.to_ascii_lowercase();
-            if d != "memory" && d != "filesystem" {
+            if d != "memory" && d != "filesystem" && d != "redis" {
                 return Err(phpx_core::PhpxError::Config(format!(
-                    "cache.driver must be memory or filesystem, got {} (PHPX Redis deferred; app-native Redis via WordPress/Laravel REDIS_HOST tetap jalan tanpa PHPX driver)",
+                    "cache.driver must be memory, filesystem or redis, got {}",
                     cache.driver
                 )));
             }
@@ -623,6 +644,19 @@ impl PhpxConfig {
                                 .to_string(),
                         ))
                     }
+                }
+            }
+            if d == "redis" {
+                let env_ok = std::env::var("PHPX_REDIS_URL")
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false);
+                match &cache.url {
+                    Some(u) if !u.trim().is_empty() => {}
+                    _ if env_ok => {}
+                    _ => return Err(phpx_core::PhpxError::Config(
+                        "cache.driver=redis requires [cache] url (e.g. redis://127.0.0.1:6379) or PHPX_REDIS_URL env"
+                            .to_string(),
+                    )),
                 }
             }
             if let Some(m) = &cache.max_memory {
@@ -738,6 +772,62 @@ mod tests {
         assert!(!with("bogus", "512M", 5));
         assert!(!with("256M", "512M", 0));
         assert!(!with("256M", "512M", 61));
+    }
+
+    #[test]
+    fn redis_drivers_validate_with_url_or_env() {
+        // Hermetic: validation reads PHPX_REDIS_URL, so stash it first.
+        let saved = std::env::var("PHPX_REDIS_URL").ok();
+        unsafe { std::env::remove_var("PHPX_REDIS_URL") };
+        let base = PhpxConfig::parse_str(EXAMPLE).expect("example parses");
+        // Redis without url and without env is rejected with an actionable message.
+        let mut no_url = base.clone();
+        no_url.queue = Some(QueueConfig {
+            driver: "redis".to_string(),
+            database: None,
+            url: None,
+            workers: 2,
+        });
+        no_url.cache = Some(CacheConfig {
+            driver: "redis".to_string(),
+            max_memory: None,
+            dir: None,
+            url: None,
+            max_entries: None,
+        });
+        let err = no_url.validate().expect_err("redis without url must fail");
+        assert!(err.to_string().contains("url"), "{err}");
+        // Explicit url validates.
+        let mut with_url = base.clone();
+        with_url.queue = Some(QueueConfig {
+            driver: "redis".to_string(),
+            database: None,
+            url: Some("redis://127.0.0.1:6379".to_string()),
+            workers: 2,
+        });
+        with_url.cache = Some(CacheConfig {
+            driver: "redis".to_string(),
+            max_memory: None,
+            dir: None,
+            url: Some("redis://127.0.0.1:6379".to_string()),
+            max_entries: None,
+        });
+        assert!(with_url.validate().is_ok());
+        // Unknown drivers are still rejected.
+        let mut bad = base.clone();
+        bad.queue = Some(QueueConfig {
+            driver: "nats".to_string(),
+            database: None,
+            url: None,
+            workers: 2,
+        });
+        assert!(bad.validate().is_err());
+        // Env fallback validates when the config url is absent.
+        unsafe { std::env::set_var("PHPX_REDIS_URL", "redis://127.0.0.1:6379") };
+        assert!(no_url.validate().is_ok());
+        if let Some(v) = saved {
+            unsafe { std::env::set_var("PHPX_REDIS_URL", v) };
+        }
     }
 
     #[test]

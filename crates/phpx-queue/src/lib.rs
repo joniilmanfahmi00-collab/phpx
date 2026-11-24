@@ -2,6 +2,7 @@ use phpx_core::{PhpxError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -223,6 +224,305 @@ impl QueueDriver for MemoryQueue {
             running: inner.running.len(),
             dead_letter: inner.dead.len(),
             max_depth: inner.max_depth,
+        })
+    }
+}
+
+pub struct RedisQueue {
+    driver_name: String,
+    conn: Mutex<redis::Connection>,
+    prefix: String,
+    max_depth: usize,
+    seq: AtomicU64,
+}
+
+impl RedisQueue {
+    /// Open a Redis-backed queue. `namespace` isolates fleets sharing one
+    /// server (tests use a uuid per case; CLI uses "default"). Keys:
+    /// `{prefix}:jobs` (HASH id->job JSON), `{prefix}:ready` (ZSET id by
+    /// not_before), `{prefix}:running` (HASH id->lease_until),
+    /// `{prefix}:dead` (HASH id->job JSON).
+    pub fn open(url: &str, namespace: &str, max_depth: usize) -> Result<Self> {
+        let ns = namespace.trim();
+        if ns.is_empty() {
+            return Err(PhpxError::Config(
+                "redis queue namespace must not be empty (isolates fleets on one server)"
+                    .to_string(),
+            ));
+        }
+        let client = redis::Client::open(url)
+            .map_err(|e| PhpxError::Runtime(format!("redis open failed: {e}")))?;
+        let mut conn = client
+            .get_connection_with_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| {
+                PhpxError::Runtime(format!(
+                    "redis connect failed (is a server listening?): {e}"
+                ))
+            })?;
+        let _: () = redis::cmd("PING")
+            .query(&mut conn)
+            .map_err(|e| PhpxError::Runtime(format!("redis ping failed: {e}")))?;
+        Ok(Self {
+            driver_name: "redis".to_string(),
+            conn: Mutex::new(conn),
+            prefix: format!("phpx:q:{ns}"),
+            max_depth: max_depth.clamp(1, MAX_QUEUE_DEPTH),
+            seq: AtomicU64::new(0),
+        })
+    }
+
+    fn locked(&self) -> Result<std::sync::MutexGuard<'_, redis::Connection>> {
+        self.conn
+            .lock()
+            .map_err(|e| PhpxError::Runtime(format!("redis connection lock poisoned: {e}")))
+    }
+
+    fn jobs_key(&self) -> String {
+        format!("{}:jobs", self.prefix)
+    }
+    fn ready_key(&self) -> String {
+        format!("{}:ready", self.prefix)
+    }
+    fn running_key(&self) -> String {
+        format!("{}:running", self.prefix)
+    }
+    fn dead_key(&self) -> String {
+        format!("{}:dead", self.prefix)
+    }
+
+    /// Score orders by visibility time, FIFO within the same second.
+    fn score(&self, not_before: u64) -> f64 {
+        let frac = (self.seq.fetch_add(1, Ordering::Relaxed) % 1000) as f64 / 1000.0;
+        not_before as f64 + frac
+    }
+
+    /// Return expired leases to the ready set (mirrors the in-memory sweep).
+    fn sweep_locked(conn: &mut redis::Connection, prefix: &str, now: u64) -> Result<()> {
+        use redis::Commands;
+        let running_key = format!("{prefix}:running");
+        let jobs_key = format!("{prefix}:jobs");
+        let ready_key = format!("{prefix}:ready");
+        let running: Vec<(String, i64)> = conn
+            .hgetall(&running_key)
+            .map_err(|e| PhpxError::Runtime(format!("redis lease sweep failed: {e}")))?;
+        for (id, lease) in running {
+            if lease.max(0) as u64 <= now {
+                let json: Option<String> = conn
+                    .hget(&jobs_key, &id)
+                    .map_err(|e| PhpxError::Runtime(format!("redis sweep read failed: {e}")))?;
+                if let Some(json) = json {
+                    if let Ok(job) = serde_json::from_str::<Job>(&json) {
+                        let score = job.not_before as f64;
+                        let _: usize = conn.zadd(&ready_key, &id, score).map_err(|e| {
+                            PhpxError::Runtime(format!("redis sweep requeue failed: {e}"))
+                        })?;
+                    } else {
+                        let _: usize = conn.hdel(&jobs_key, &id).map_err(|e| {
+                            PhpxError::Runtime(format!("redis sweep cleanup failed: {e}"))
+                        })?;
+                    }
+                }
+                let _: usize = conn
+                    .hdel(&running_key, &id)
+                    .map_err(|e| PhpxError::Runtime(format!("redis sweep release failed: {e}")))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete every key under this namespace (test hygiene; never touches
+    /// other namespaces on the shared server).
+    pub fn flush_namespace(&self) -> Result<()> {
+        use redis::Commands;
+        let mut conn = self.locked()?;
+        let pattern = format!("{}:*", self.prefix);
+        let keys: Vec<String> = conn
+            .scan_match(&pattern)
+            .map_err(|e| PhpxError::Runtime(format!("redis scan failed: {e}")))?
+            .map(|r| r.map_err(|e| PhpxError::Runtime(format!("redis scan failed: {e}"))))
+            .collect::<Result<Vec<_>>>()?;
+        if !keys.is_empty() {
+            let _: usize = conn
+                .del(keys)
+                .map_err(|e| PhpxError::Runtime(format!("redis flush failed: {e}")))?;
+        }
+        Ok(())
+    }
+}
+
+impl QueueDriver for RedisQueue {
+    fn enqueue(&self, payload: &str, max_retries: u32, delay_secs: u64) -> Result<Job> {
+        use redis::Commands;
+        check_payload(payload)?;
+        let mut conn = self.locked()?;
+        let ready: usize = conn
+            .zcard(self.ready_key())
+            .map_err(|e| PhpxError::Runtime(format!("redis depth check failed: {e}")))?;
+        let running: usize = conn
+            .hlen(self.running_key())
+            .map_err(|e| PhpxError::Runtime(format!("redis depth check failed: {e}")))?;
+        let depth = ready + running;
+        if depth >= self.max_depth {
+            return Err(PhpxError::Runtime(format!(
+                "queue full: depth {depth} >= bound {} (backpressure, never unbounded)",
+                self.max_depth
+            )));
+        }
+        let now = now_unix();
+        let job = Job {
+            id: uuid::Uuid::new_v4().to_string(),
+            payload: payload.to_string(),
+            attempts: 0,
+            max_retries: max_retries.min(25),
+            not_before: now + delay_secs,
+            created_at: now,
+        };
+        let json = serde_json::to_string(&job)
+            .map_err(|e| PhpxError::Runtime(format!("redis encode failed: {e}")))?;
+        let score = self.score(job.not_before);
+        let _: bool = conn
+            .hset(self.jobs_key(), &job.id, &json)
+            .map_err(|e| PhpxError::Runtime(format!("redis enqueue failed: {e}")))?;
+        if let Err(e) = conn.zadd::<_, _, _, ()>(self.ready_key(), &job.id, score) {
+            let _: Option<usize> = conn.hdel(self.jobs_key(), &job.id).ok();
+            return Err(PhpxError::Runtime(format!("redis enqueue failed: {e}")));
+        }
+        Ok(job)
+    }
+
+    fn reserve(&self, visibility_timeout_secs: u64) -> Result<Option<Job>> {
+        use redis::Commands;
+        let mut conn = self.locked()?;
+        let now = now_unix();
+        Self::sweep_locked(&mut conn, &self.prefix, now)?;
+        let due: Vec<String> = conn
+            .zrangebyscore_limit(self.ready_key(), 0, now as isize, 0, 1)
+            .map_err(|e| PhpxError::Runtime(format!("redis reserve scan failed: {e}")))?;
+        let Some(id) = due.into_iter().next() else {
+            return Ok(None);
+        };
+        let claimed: usize = conn
+            .zrem(self.ready_key(), &id)
+            .map_err(|e| PhpxError::Runtime(format!("redis claim failed: {e}")))?;
+        if claimed == 0 {
+            return Ok(None);
+        }
+        let json: Option<String> = conn
+            .hget(self.jobs_key(), &id)
+            .map_err(|e| PhpxError::Runtime(format!("redis reserve read failed: {e}")))?;
+        let Some(json) = json else {
+            return Ok(None);
+        };
+        let job: Job = serde_json::from_str(&json)
+            .map_err(|e| PhpxError::Runtime(format!("redis decode failed: {e}")))?;
+        let lease = now + visibility_timeout_secs.max(1);
+        let _: bool = conn
+            .hset(self.running_key(), &id, lease as i64)
+            .map_err(|e| PhpxError::Runtime(format!("redis lease failed: {e}")))?;
+        Ok(Some(job))
+    }
+
+    fn ack(&self, id: &str) -> Result<bool> {
+        use redis::Commands;
+        let mut conn = self.locked()?;
+        let running: bool = conn
+            .hexists(self.running_key(), id)
+            .map_err(|e| PhpxError::Runtime(format!("redis ack check failed: {e}")))?;
+        if !running {
+            return Ok(false);
+        }
+        let _: usize = conn
+            .hdel(self.running_key(), id)
+            .map_err(|e| PhpxError::Runtime(format!("redis ack failed: {e}")))?;
+        let _: usize = conn
+            .hdel(self.jobs_key(), id)
+            .map_err(|e| PhpxError::Runtime(format!("redis ack cleanup failed: {e}")))?;
+        Ok(true)
+    }
+
+    fn fail(&self, id: &str) -> Result<FailOutcome> {
+        use redis::Commands;
+        let mut conn = self.locked()?;
+        let lease: Option<i64> = conn
+            .hget(self.running_key(), id)
+            .map_err(|e| PhpxError::Runtime(format!("redis fail check failed: {e}")))?;
+        if lease.is_none() {
+            return Err(PhpxError::Runtime(format!(
+                "queue fail: unknown running job {id}"
+            )));
+        }
+        let json: Option<String> = conn
+            .hget(self.jobs_key(), id)
+            .map_err(|e| PhpxError::Runtime(format!("redis fail read failed: {e}")))?;
+        let Some(json) = json else {
+            return Err(PhpxError::Runtime(format!(
+                "queue fail: unknown running job {id}"
+            )));
+        };
+        let mut job: Job = serde_json::from_str(&json)
+            .map_err(|e| PhpxError::Runtime(format!("redis decode failed: {e}")))?;
+        job.attempts += 1;
+        if job.attempts > job.max_retries {
+            let attempts = job.attempts;
+            let json = serde_json::to_string(&job)
+                .map_err(|e| PhpxError::Runtime(format!("redis encode failed: {e}")))?;
+            let _: bool = conn
+                .hset(self.dead_key(), id, &json)
+                .map_err(|e| PhpxError::Runtime(format!("redis dead-letter failed: {e}")))?;
+            let _: usize = conn.hdel(self.running_key(), id).map_err(|e| {
+                PhpxError::Runtime(format!("redis dead-letter cleanup failed: {e}"))
+            })?;
+            let _: usize = conn.hdel(self.jobs_key(), id).map_err(|e| {
+                PhpxError::Runtime(format!("redis dead-letter cleanup failed: {e}"))
+            })?;
+            Ok(FailOutcome::Dead { attempts })
+        } else {
+            let nb = now_unix() + backoff_secs(job.attempts);
+            job.not_before = nb;
+            let attempts = job.attempts;
+            let json = serde_json::to_string(&job)
+                .map_err(|e| PhpxError::Runtime(format!("redis encode failed: {e}")))?;
+            let _: bool = conn
+                .hset(self.jobs_key(), id, &json)
+                .map_err(|e| PhpxError::Runtime(format!("redis retry update failed: {e}")))?;
+            let _: usize = conn
+                .hdel(self.running_key(), id)
+                .map_err(|e| PhpxError::Runtime(format!("redis retry release failed: {e}")))?;
+            let score = self.score(nb);
+            let _: usize = conn
+                .zadd(self.ready_key(), id, score)
+                .map_err(|e| PhpxError::Runtime(format!("redis retry requeue failed: {e}")))?;
+            Ok(FailOutcome::Retrying {
+                attempts,
+                not_before: nb,
+            })
+        }
+    }
+
+    fn status(&self) -> Result<QueueStatus> {
+        use redis::Commands;
+        let mut conn = self.locked()?;
+        let now = now_unix();
+        Self::sweep_locked(&mut conn, &self.prefix, now)?;
+        let depth: usize = conn
+            .zcard(self.ready_key())
+            .map_err(|e| PhpxError::Runtime(format!("redis count failed: {e}")))?;
+        let running: usize = conn
+            .hlen(self.running_key())
+            .map_err(|e| PhpxError::Runtime(format!("redis count failed: {e}")))?;
+        let delayed: usize = conn
+            .zcount(self.ready_key(), format!("({now}"), "+inf")
+            .map_err(|e| PhpxError::Runtime(format!("redis count failed: {e}")))?;
+        let dead: usize = conn
+            .hlen(self.dead_key())
+            .map_err(|e| PhpxError::Runtime(format!("redis count failed: {e}")))?;
+        Ok(QueueStatus {
+            driver: self.driver_name.clone(),
+            depth: depth + running,
+            delayed,
+            running,
+            dead_letter: dead,
+            max_depth: self.max_depth,
         })
     }
 }
@@ -475,6 +775,7 @@ pub fn open_queue(
     driver: &str,
     database: Option<&str>,
     max_depth: usize,
+    redis_url: Option<&str>,
 ) -> Result<Box<dyn QueueDriver>> {
     match driver.to_ascii_lowercase().as_str() {
         "memory" => Ok(Box::new(MemoryQueue::new(max_depth))),
@@ -487,8 +788,25 @@ pub fn open_queue(
             })?;
             Ok(Box::new(SqliteQueue::open(Path::new(db), max_depth)?))
         }
+        "redis" => {
+            let url = redis_url
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    std::env::var("PHPX_REDIS_URL")
+                        .ok()
+                        .filter(|s| !s.trim().is_empty())
+                })
+                .ok_or_else(|| {
+                    PhpxError::Config(
+                        "queue.driver=redis requires [queue] url (e.g. redis://127.0.0.1:6379) or PHPX_REDIS_URL env"
+                            .to_string(),
+                    )
+                })?;
+            Ok(Box::new(RedisQueue::open(&url, "default", max_depth)?))
+        }
         other => Err(PhpxError::Config(format!(
-            "queue.driver must be memory or sqlite, got {other} (PHPX Redis deferred; app-native Redis via WordPress/Laravel REDIS_HOST tetap jalan tanpa PHPX driver)"
+            "queue.driver must be memory, sqlite or redis, got {other}"
         ))),
     }
 }

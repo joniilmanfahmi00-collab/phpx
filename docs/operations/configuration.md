@@ -65,16 +65,18 @@ request_timeout_seconds = 30
 | `runtime.process.restart_backoff_ms` | `250` | `10-60000`. Base backoff for circuit window |
 | `runtime.process.restart_backoff_max_ms` | `30000` | `>= base`, `<=300000`. Backoff cap (exponential + jitter) |
 | `runtime.embedded.enabled` | `false` | Experimental opt-in since M6.1 (stub: available=false); process stays default |
-| `queue.driver` | `"sqlite"` | `memory` (ephemeral dev) / `sqlite` (durable). Redis deferred. `queue status` real exit 0 (M5 phase 1) |
+| `queue.driver` | `"sqlite"` | `memory` (ephemeral dev) / `sqlite` (durable) / `redis` (shared server). `queue status` real exit 0 (M5 phase 1 + Redis) |
 | `queue.database` | `"./data/queue.db"` | Required when `driver=sqlite` |
+| `queue.url` | none | Required when `driver=redis`, e.g. `redis://127.0.0.1:6379` (or `PHPX_REDIS_URL` env) |
 | `queue.workers` | `2` | `1-16` (bounded) |
 | `scheduler.enabled` | `false` | `false` = `scheduler run` exit 0 + note. `true` + schedules = real dispatch (M5 phase 2) |
 | `scheduler.history_file` | none (memory) | e.g. `"./data/scheduler.db"` for durable dedup; empty = ephemeral |
 | `scheduler.poll_interval_secs` | `30` | `1-3600`. Informational for timer operators (CLI is single-pass) |
 | `scheduler.schedules` | `[]` | Max 100, ids unique. See `scheduler.md` for `[[scheduler.schedules]]` keys |
-| `cache.driver` | `"memory"` | `memory` (ephemeral) / `filesystem` (durable). Redis deferred. `cache status|get|set|clear` real exit 0 (M5 phase 3) |
+| `cache.driver` | `"memory"` | `memory` (ephemeral) / `filesystem` (durable) / `redis` (shared server). `cache status|get|set|clear` real exit 0 (M5 phase 3 + Redis) |
 | `cache.max_memory` | `"128MB"` | `1KB-1GB` via `parse_size`. Bound for memory+filesystem |
 | `cache.dir` | none | Required when `driver=filesystem`, e.g. `./data/cache` |
+| `cache.url` | none | Required when `driver=redis`, e.g. `redis://127.0.0.1:6379` (or `PHPX_REDIS_URL` env) |
 | `cache.max_entries` | `1000` | `1-100000` (bounded) |
 | `storage.driver` | `"local"` | `local` (real) / `s3` (prototype: config real, transport deferred) |
 | `storage.root` | none | Required when `driver=local`, e.g. `./data/storage` |
@@ -112,12 +114,12 @@ request_timeout_seconds = 30
   RSS != PHP heap: allocator behavior, native extensions, shared libraries and
   fragmentation affect observed RSS; sampling overshoot between sample points is
   possible and does not imply a leak (or prove its absence).
-- `queue.driver` must be `memory` or `sqlite`; `workers` 1-16; sqlite requires `database`.
+- `queue.driver` must be `memory`, `sqlite` or `redis`; `workers` 1-16; sqlite requires `database`; redis requires `url` (or `PHPX_REDIS_URL`).
 - `scheduler.poll_interval_secs` 1-3600; max 100 schedules; ids unique.
   Each schedule validated via `ScheduleDef::new` (cron, timezone, payload,
   policy, retries) — config and CLI can never disagree. Bad schedule = exit 2
   with flattened `invalid schedule: ...` message.
-- `cache.driver` must be `memory` or `filesystem` (redis deferred); filesystem requires `dir`; `max_memory` 1KB-1GB; `max_entries` 1-100000.
+- `cache.driver` must be `memory`, `filesystem` or `redis`; filesystem requires `dir`; redis requires `url` (or `PHPX_REDIS_URL`); `max_memory` 1KB-1GB; `max_entries` 1-100000.
 - `storage.driver` must be `local` or `s3`; local requires `root`; s3 requires `endpoint` + `bucket` (prototype, transport deferred).
 
 ## CLI overrides (M3 finalized, M5 queue/scheduler/cache/storage real)

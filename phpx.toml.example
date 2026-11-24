@@ -79,11 +79,13 @@ restart_backoff_max_ms = 30000
 # Keep false unless experimenting. mode=embedded requires enabled=true (experimental, process stays default).
 enabled = false
 
-# Queue (M5 phase 1 real): memory = ephemeral dev, sqlite = durable single-node baseline.
+# Queue (M5 phase 1 real + Redis): memory = ephemeral dev, sqlite = durable single-node baseline,
+# redis = shared server (needs [queue] url or PHPX_REDIS_URL).
 # `phpx queue status|push|work` are real (exit 0; push refused on memory with exit 2).
 [queue]
 driver = "sqlite"
 database = "./data/queue.db"
+# url = "redis://127.0.0.1:6379" # required when driver=redis
 workers = 2
 
 # Scheduler (M5 phase 2 real): single-pass dispatch-only, never executes PHP.
@@ -103,12 +105,14 @@ poll_interval_secs = 30
 # missed_policy = "skip"
 # max_retries = 3
 
-# Cache (M5 phase 3 real): memory = ephemeral, filesystem = durable single-node.
-# `phpx cache status|get|set|clear` are real (exit 0). Redis deferred.
+# Cache (M5 phase 3 real + Redis): memory = ephemeral, filesystem = durable single-node,
+# redis = shared server (needs [cache] url or PHPX_REDIS_URL).
+# `phpx cache status|get|set|clear` are real (exit 0).
 [cache]
 driver = "memory"
 max_memory = "128MB"
 # dir = "./data/cache"
+# url = "redis://127.0.0.1:6379" # required when driver=redis
 # max_entries = 1000
 
 # Storage (M5 phase 3 real): local = durable FS, s3 = prototype (config real, transport deferred).

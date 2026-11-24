@@ -1,10 +1,10 @@
-# PHPX cache (M5 phase 3)
+# PHPX cache (M5 phase 3 + Redis follow-up)
 
-Status: phase 3 DONE — bounded memory + filesystem, TTL, contract tests.
-PHPX Redis driver deferred (needs network + deployment justification). App-native Redis via WordPress/Laravel REDIS_HOST tetap jalan langsung dari PHP, tanpa PHPX driver.
+Status: phase 3 DONE — bounded memory + filesystem + Redis, TTL, contract tests.
+App-native Redis via WordPress/Laravel REDIS_HOST tetap jalan langsung dari PHP, tanpa PHPX driver.
 
 SPEC 7.3: PHP OPcache stays owned by PHP. This cache is application data
-(strings/bytes) only, never opcode. Both drivers are bounded and share
+(strings/bytes) only, never opcode. All three drivers are bounded and share
 one contract suite.
 
 ## Drivers
@@ -13,8 +13,13 @@ one contract suite.
   Hits/misses counted in-process. Good for dev + tests.
 - `filesystem`: one file per key (`<key>.cache`, 8-byte BE expiry + value),
   oldest-mtime eviction, survives restart. Good for single-node baseline.
-- PHPX Redis driver: deferred to later M5. App-native Redis tetap didukung via REDIS_HOST. Needs network + justification; config
-  rejects `redis` with actionable message.
+- `redis`: shared/networked driver (same contract suite + TTL-expiry + namespace
+  isolation pins). Server at `[cache] url` or `PHPX_REDIS_URL` env. Same
+  8-byte-BE-expiry envelope as filesystem. Eviction oldest-first via a sorted-set
+  index; bytes accounted in a counter key (lazy-expiry drift possible, same class
+  as filesystem mtime drift). Hits/misses are process-local counters. Keys are
+  namespaced (`phpx:cache:<namespace>:`; CLI uses `default`). Secrets: the URL
+  is never logged.
 
 ## Semantics (SPEC 7.3)
 
@@ -38,24 +43,27 @@ one contract suite.
 
 ```toml
 [cache]
-driver = "memory" # memory | filesystem (redis deferred)
+driver = "memory" # memory | filesystem | redis
 max_memory = "128MB" # 1KB-1GB, parsed by parse_size
 dir = "./data/cache" # required when driver=filesystem
+url = "redis://127.0.0.1:6379" # required when driver=redis (or PHPX_REDIS_URL env)
 max_entries = 1000 # 1-100000
 ```
 
 Validation (`phpx-config`): unknown driver exits 2, filesystem without
-`dir` exits 2, `max_memory` must parse 1KB-1GB, `max_entries` 1-100000.
+`dir` exits 2, redis without `url` (and without `PHPX_REDIS_URL`) exits 2,
+`max_memory` must parse 1KB-1GB, `max_entries` 1-100000.
 
 ## Tests
 
-- `crates/phpx-cache/tests/contract.rs` (same suite vs both drivers):
-  set/get, TTL/delete/clear, survive-reopen (filesystem only), rejects bad keys.
-- `cargo test -p phpx-cache` green (2 unit + 4 contract).
+- `crates/phpx-cache/tests/contract.rs` (same suite vs all drivers):
+  set/get, TTL/delete/clear, survive-reopen (filesystem only), TTL expiry
+  (redis), namespace isolation (redis), rejects bad keys. Redis cases run
+  against live `PHPX_REDIS_URL` and SKIP loudly without it.
+- `cargo test -p phpx-cache` green (2 unit + 10 contract).
 - CLI: `cache status` exit 0, `--json` has `entries`.
 
 ## Deferred (later M5)
 
-- PHPX Redis driver with integration justification (app-native Redis tetap jalan via WP/Laravel, tanpa PHPX).
 - Gateway-integrated cache middleware (needs runtime-process integration).
 - Cache warming / stampede protection.

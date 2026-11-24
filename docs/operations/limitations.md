@@ -29,8 +29,8 @@ responsible.
 - TLS via Rustls when `tls=true` + PEM cert/key; plain HTTP for local/tests.
 - HTTP/1.1 only. HTTP/2 deferred.
 - Queue + scheduler + cache + storage are real (`queue.md`, `scheduler.md`,
-  `cache.md`, `storage.md`). PHPX Redis driver deferred; app-native Redis via
-  `REDIS_HOST` works directly from PHP without a PHPX driver.
+  `cache.md`, `storage.md`), incl. Redis queue/cache drivers (needs a server;
+  app-native Redis via `REDIS_HOST` works directly from PHP without a PHPX driver).
 - Benchmark laboratory (`scripts/bench-lab.sh/.ps1`): throughput, latency
   distribution, cold vs warm, gateway RSS trend — developer-machine numbers,
   never an SLA.
@@ -59,7 +59,7 @@ responsible.
 - No multi-tenancy isolation claim. PHP extensions + app code are trusted
   executable code (SPEC 10).
 - No WAF, CDN, or full reverse-proxy parity (SPEC 6.2 deferred).
-- S3 storage transport is a prototype; Redis queue/cache drivers deferred.
+- S3 storage transport is a prototype; Redis queue/cache drivers need a live server (`PHPX_REDIS_URL`).
 - cgroup CPU/memory auto-detection: none. The gateway stays bounded and
   observable; enforcement is operator + orchestrator responsibility
   (Docker `--cpus/--memory`, systemd `MemoryMax=`/`CPUQuota=`).

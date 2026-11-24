@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "PHPX M5 cache drivers: bounded memory + filesystem, TTL, contract tests"
+description = "PHPX M5 cache drivers: bounded memory + filesystem + shared Redis, TTL, contract tests"
 
 [dependencies]
 phpx-core.workspace = true
+redis = "1.8.3"
 serde.workspace = true
 serde_json.workspace = true
 

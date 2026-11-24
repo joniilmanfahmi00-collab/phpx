@@ -1,5 +1,19 @@
-use phpx_queue::{MemoryQueue, QueueDriver, SqliteQueue};
+use phpx_queue::{MemoryQueue, QueueDriver, RedisQueue, SqliteQueue};
 use std::path::PathBuf;
+
+fn redis_url() -> Option<String> {
+    std::env::var("PHPX_REDIS_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+fn redis_queue() -> Option<RedisQueue> {
+    let url = redis_url()?;
+    let ns = format!("test-{}", uuid::Uuid::new_v4());
+    let q = RedisQueue::open(&url, &ns, 100).expect("open redis queue");
+    q.flush_namespace().expect("flush redis namespace");
+    Some(q)
+}
 
 fn memory() -> MemoryQueue {
     MemoryQueue::new(100)
@@ -100,4 +114,69 @@ fn dead_letter_after_max_retries_memory() {
     let st = q.status().expect("status");
     assert_eq!(st.dead_letter, 1);
     assert_eq!(st.depth, 0);
+}
+
+fn require_redis() -> Option<RedisQueue> {
+    match redis_queue() {
+        Some(q) => Some(q),
+        None => {
+            eprintln!("SKIP redis contract: set PHPX_REDIS_URL (e.g. redis://127.0.0.1:6379)");
+            None
+        }
+    }
+}
+
+#[test]
+fn redis_enqueue_reserve_ack() {
+    let Some(q) = require_redis() else { return };
+    assert_eq!(q.status().expect("status").driver, "redis");
+    contract_enqueue_reserve_ack(&q);
+    q.flush_namespace().expect("flush");
+}
+
+#[test]
+fn redis_retry_delayed() {
+    let Some(q) = require_redis() else { return };
+    contract_retry_then_dead(&q);
+    q.flush_namespace().expect("flush");
+}
+
+#[test]
+fn redis_dead_letter_after_max_retries() {
+    let Some(q) = require_redis() else { return };
+    let j = q.enqueue("boom", 0, 0).expect("enq");
+    let r = q.reserve(60).expect("res").expect("job");
+    assert_eq!(r.id, j.id);
+    let o = q.fail(&j.id).expect("fail");
+    assert!(matches!(o, phpx_queue::FailOutcome::Dead { .. }));
+    let st = q.status().expect("status");
+    assert_eq!(st.dead_letter, 1);
+    assert_eq!(st.depth, 0);
+    q.flush_namespace().expect("flush");
+}
+
+#[test]
+fn redis_namespaces_are_isolated() {
+    let url = match redis_url() {
+        Some(u) => u,
+        None => {
+            eprintln!("SKIP redis contract: set PHPX_REDIS_URL (e.g. redis://127.0.0.1:6379)");
+            return;
+        }
+    };
+    let a =
+        RedisQueue::open(&url, &format!("iso-a-{}", uuid::Uuid::new_v4()), 100).expect("open a");
+    let b =
+        RedisQueue::open(&url, &format!("iso-b-{}", uuid::Uuid::new_v4()), 100).expect("open b");
+    a.flush_namespace().expect("flush a");
+    b.flush_namespace().expect("flush b");
+    let j = a.enqueue("private", 3, 0).expect("enq a");
+    assert!(
+        b.reserve(60).expect("res b").is_none(),
+        "B must not see A's job"
+    );
+    let got = a.reserve(60).expect("res a").expect("A sees its job");
+    assert_eq!(got.id, j.id);
+    a.flush_namespace().expect("flush a");
+    b.flush_namespace().expect("flush b");
 }

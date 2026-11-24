@@ -1,8 +1,8 @@
 # PHPX M5 notes - Platform services (phase 1 queue + phase 2 scheduler + phase 3 cache/storage)
 
 Goal: useful application infrastructure without compromising the core server.
-Status: phase 1 + phase 2 + phase 3 DONE (queue + scheduler + cache/storage real, dispatch-only).
-Redis/S3-transport remain deferred to later M5.
+Status: phase 1 + phase 2 + phase 3 DONE (queue + scheduler + cache/storage real, dispatch-only)
++ Redis queue/cache drivers. S3-transport remains deferred to later M5.
 
 ## Phase 1: queue (DONE)
 
@@ -71,23 +71,23 @@ Redis/S3-transport remain deferred to later M5.
 
 ## Deferred (explicit, later M5 / M6)
 
-- Redis adapter (queue + cache) with integration justification.
-- Cache: bounded memory + filesystem + contract tests.
+- Cache: bounded memory + filesystem + Redis + contract tests.
 - Storage: local FS adapter + S3 prototype.
 - PHP dispatch for queue jobs (needs runtime-process integration off gateway threads).
 - Multi-node dispatch coordination (current history PK is single-node baseline).
 - Embedded runtime (M6 experimental), HTTP/2 gated.
 
-Traceability: SPEC 7.1 queue + 7.2 scheduler dispatch-only + 7.3 cache + 7.4 storage covered by M5 phase 1+2+3;
-SPEC 15 tail covered (queue/scheduler/cache/storage); Redis/S3-transport still open.
+Traceability: SPEC 7.1 queue + 7.2 scheduler dispatch-only + 7.3 cache + 7.4 storage covered by M5 phase 1+2+3 + Redis follow-up;
+SPEC 15 tail covered (queue/scheduler/cache/storage); S3-transport still open.
 
 ## Phase 3: cache + storage (DONE, bounded per SPEC 7.3/7.4)
 
 - Crate `phpx-cache`: `CacheDriver` (`get/set/delete/clear/stats`),
   `MemoryCache` (HashMap + FIFO eviction, hits/misses) +
-  `FilesystemCache` (one file per key, 8-byte expiry + value, oldest-mtime eviction, survives reopen).
+  `FilesystemCache` (one file per key, 8-byte expiry + value, oldest-mtime eviction, survives reopen) +
+  `RedisCache` (same envelope, sorted-set eviction index, namespace isolation).
   Bounds: key 1-256 `[A-Za-z0-9 . _ - :]`, value max 1MB, entries max 100k, bytes max 1GB.
-  TTL 0 = no expiry, max 30d. Redis deferred (needs network + justification).
+  TTL 0 = no expiry, max 30d. Redis shares the contract suite (namespace isolation + TTL-expiry pins).
 - Crate `phpx-storage`: `StorageDriver` (`put/get/delete/list/status`),
   `LocalStorage` (root + parents auto, traversal blocked, list max 1000 sorted, survives reopen) +
   `S3Prototype` (endpoint+bucket+region validated real, data ops deferred with actionable note, `status` works).

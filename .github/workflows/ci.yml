@@ -32,6 +32,17 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=20
+      # M5 Redis follow-up: live server for the queue/cache contract suites
+      # (tests SKIP loudly without PHPX_REDIS_URL; CI runs them for real).
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -64,6 +75,8 @@ jobs:
       - run: bash scripts/bench-lab.sh --requests 60 --concurrency 4 --mode one-shot --max-failures 0 --out-dir /tmp/bench-lab-ci
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+        env:
+          PHPX_REDIS_URL: redis://127.0.0.1:6379
       - run: cargo build --workspace
       - run: ./target/debug/phpx doctor
       - run: ./target/debug/phpx version

@@ -1,8 +1,6 @@
-//! PHPX cache (M5 phase 3): bounded in-memory + filesystem drivers with TTL.
-//!
-//! SPEC 7.3: PHP OPcache stays owned by PHP. This cache is application data
-//! only (strings/bytes), never opcode. Both drivers are bounded and share
-//! one contract suite. Redis is deferred (needs network + justification).
+//! PHPX cache (M5 phase 3 + Redis follow-up): bounded memory, filesystem and
+//! Redis drivers with TTL. Redis needs a server (see `RedisCache::open`,
+//! `PHPX_REDIS_URL`); without one, memory/filesystem stay the default.
 
 use phpx_core::{PhpxError, Result};
 use serde::{Deserialize, Serialize};
@@ -434,12 +432,275 @@ impl CacheDriver for FilesystemCache {
     }
 }
 
+/// Redis driver (M5 follow-up): same envelope as the filesystem driver
+/// (8-byte BE expiry + raw value), server-side index for bounded eviction.
+/// Hits/misses are process-local counters like the filesystem driver.
+/// `move` semantics: entries are read by value; expiry is lazy on read.
+/// Keys: `{prefix}{key}` entries, `{prefix}~idx` (ZSET key by mtime micros),
+/// `{prefix}~bytes` (STRING total envelope bytes). `~` never appears in
+/// `check_key` keys, so data keys and bookkeeping keys cannot collide.
+pub struct RedisCache {
+    driver_name: String,
+    conn: Mutex<redis::Connection>,
+    prefix: String,
+    max_entries: usize,
+    max_bytes: u64,
+    counters: Mutex<(u64, u64)>,
+}
+
+impl RedisCache {
+    /// Open a Redis-backed cache. `namespace` isolates fleets sharing one
+    /// server (tests use a uuid per case; CLI uses "default").
+    pub fn open(url: &str, namespace: &str, max_entries: usize, max_bytes: u64) -> Result<Self> {
+        let ns = namespace.trim();
+        if ns.is_empty() {
+            return Err(PhpxError::Config(
+                "redis cache namespace must not be empty (isolates fleets on one server)"
+                    .to_string(),
+            ));
+        }
+        let client = redis::Client::open(url)
+            .map_err(|e| PhpxError::Runtime(format!("redis open failed: {e}")))?;
+        let mut conn = client
+            .get_connection_with_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| {
+                PhpxError::Runtime(format!(
+                    "redis connect failed (is a server listening?): {e}"
+                ))
+            })?;
+        let _: () = redis::cmd("PING")
+            .query(&mut conn)
+            .map_err(|e| PhpxError::Runtime(format!("redis ping failed: {e}")))?;
+        Ok(Self {
+            driver_name: "redis".to_string(),
+            conn: Mutex::new(conn),
+            prefix: format!("phpx:cache:{ns}:"),
+            max_entries: max_entries.clamp(1, MAX_ENTRIES),
+            max_bytes: max_bytes.clamp(1024, MAX_TOTAL_BYTES),
+            counters: Mutex::new((0, 0)),
+        })
+    }
+
+    fn locked(&self) -> Result<std::sync::MutexGuard<'_, redis::Connection>> {
+        self.conn
+            .lock()
+            .map_err(|e| PhpxError::Runtime(format!("redis connection lock poisoned: {e}")))
+    }
+
+    fn entry_key(&self, key: &str) -> String {
+        format!("{}{key}", self.prefix)
+    }
+    fn index_key(&self) -> String {
+        format!("{}~idx", self.prefix)
+    }
+    fn bytes_key(&self) -> String {
+        format!("{}~bytes", self.prefix)
+    }
+
+    fn evict_if_needed(&self, need_bytes: u64) -> Result<()> {
+        use redis::Commands;
+        let mut conn = self.locked()?;
+        for _ in 0..1024 {
+            let entries: usize = conn
+                .zcard(self.index_key())
+                .map_err(|e| PhpxError::Runtime(format!("redis eviction count failed: {e}")))?;
+            let bytes: i64 = conn
+                .get(self.bytes_key())
+                .map(|v: Option<i64>| v.unwrap_or(0))
+                .map_err(|e| PhpxError::Runtime(format!("redis eviction count failed: {e}")))?;
+            if entries < self.max_entries && (bytes.max(0) as u64) + need_bytes <= self.max_bytes {
+                return Ok(());
+            }
+            let oldest: Vec<(String, f64)> = conn
+                .zpopmin(self.index_key(), 1)
+                .map_err(|e| PhpxError::Runtime(format!("redis eviction failed: {e}")))?;
+            let Some((member, _)) = oldest.into_iter().next() else {
+                break;
+            };
+            let entry = format!("{}{member}", self.prefix);
+            let len: usize = conn
+                .strlen(&entry)
+                .map_err(|e| PhpxError::Runtime(format!("redis eviction stat failed: {e}")))?;
+            let _: usize = conn
+                .del(&entry)
+                .map_err(|e| PhpxError::Runtime(format!("redis eviction delete failed: {e}")))?;
+            let _: i64 = conn.decr(self.bytes_key(), len as i64).map_err(|e| {
+                PhpxError::Runtime(format!("redis eviction accounting failed: {e}"))
+            })?;
+        }
+        Err(PhpxError::Runtime(format!(
+            "cache full: bound {} entries / {} bytes (backpressure, never unbounded)",
+            self.max_entries, self.max_bytes
+        )))
+    }
+
+    /// Delete every key under this namespace (test hygiene; never touches
+    /// other namespaces on the shared server).
+    pub fn flush_namespace(&self) -> Result<()> {
+        use redis::Commands;
+        let mut conn = self.locked()?;
+        let pattern = format!("{}*", self.prefix);
+        let keys: Vec<String> = conn
+            .scan_match(&pattern)
+            .map_err(|e| PhpxError::Runtime(format!("redis scan failed: {e}")))?
+            .map(|r| r.map_err(|e| PhpxError::Runtime(format!("redis scan failed: {e}"))))
+            .collect::<Result<Vec<_>>>()?;
+        if !keys.is_empty() {
+            let _: usize = conn
+                .del(keys)
+                .map_err(|e| PhpxError::Runtime(format!("redis flush failed: {e}")))?;
+        }
+        Ok(())
+    }
+}
+
+impl CacheDriver for RedisCache {
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        use redis::Commands;
+        check_key(key)?;
+        let mut conn = self.locked()?;
+        let raw: Option<Vec<u8>> = conn
+            .get(self.entry_key(key))
+            .map_err(|e| PhpxError::Runtime(format!("redis get failed: {e}")))?;
+        match raw {
+            None => {
+                if let Ok(mut c) = self.counters.lock() {
+                    c.1 += 1;
+                }
+                Ok(None)
+            }
+            Some(bytes) => {
+                let expired_or_short = bytes.len() < 8 || {
+                    let exp = u64::from_be_bytes(bytes[0..8].try_into().expect("8 bytes"));
+                    exp != 0 && exp <= now_unix()
+                };
+                if expired_or_short {
+                    let entry = self.entry_key(key);
+                    let _: usize = conn.del(&entry).unwrap_or(0);
+                    let _: usize = conn.zrem(self.index_key(), key).unwrap_or(0);
+                    let _: i64 = conn.decr(self.bytes_key(), bytes.len() as i64).unwrap_or(0);
+                    if let Ok(mut c) = self.counters.lock() {
+                        c.1 += 1;
+                    }
+                    Ok(None)
+                } else {
+                    if let Ok(mut c) = self.counters.lock() {
+                        c.0 += 1;
+                    }
+                    Ok(Some(bytes[8..].to_vec()))
+                }
+            }
+        }
+    }
+
+    fn set(&self, key: &str, value: &[u8], ttl_secs: u64) -> Result<()> {
+        use redis::Commands;
+        check_key(key)?;
+        check_value(value)?;
+        let exp = if ttl_secs == 0 {
+            0
+        } else {
+            now_unix() + ttl_secs.min(86400 * 30)
+        };
+        let entry = self.entry_key(key);
+        let mut conn = self.locked()?;
+        let old_len: usize = conn
+            .strlen(&entry)
+            .map_err(|e| PhpxError::Runtime(format!("redis set stat failed: {e}")))?;
+        let mut buf = Vec::with_capacity(8 + value.len());
+        buf.extend_from_slice(&exp.to_be_bytes());
+        buf.extend_from_slice(value);
+        drop(conn);
+        self.evict_if_needed(buf.len() as u64)?;
+        let mut conn = self.locked()?;
+        let _: () = conn
+            .set(&entry, &buf)
+            .map_err(|e| PhpxError::Runtime(format!("redis set failed: {e}")))?;
+        let micros = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_micros() as f64)
+            .unwrap_or(0.0);
+        let _: usize = conn
+            .zadd(self.index_key(), key, micros)
+            .map_err(|e| PhpxError::Runtime(format!("redis index update failed: {e}")))?;
+        let delta = buf.len() as i64 - old_len as i64;
+        let _: i64 = conn
+            .incr(self.bytes_key(), delta)
+            .map_err(|e| PhpxError::Runtime(format!("redis accounting failed: {e}")))?;
+        Ok(())
+    }
+
+    fn delete(&self, key: &str) -> Result<bool> {
+        use redis::Commands;
+        check_key(key)?;
+        let mut conn = self.locked()?;
+        let entry = self.entry_key(key);
+        let len: usize = conn
+            .strlen(&entry)
+            .map_err(|e| PhpxError::Runtime(format!("redis delete stat failed: {e}")))?;
+        let gone: usize = conn
+            .del(&entry)
+            .map_err(|e| PhpxError::Runtime(format!("redis delete failed: {e}")))?;
+        // Drop stale index rows even when the entry itself is gone (drift).
+        let _: usize = conn.zrem(self.index_key(), key).unwrap_or(0);
+        if gone == 0 {
+            return Ok(false);
+        }
+        let _: i64 = conn.decr(self.bytes_key(), len as i64).unwrap_or(0);
+        Ok(true)
+    }
+
+    fn clear(&self) -> Result<usize> {
+        use redis::Commands;
+        let mut conn = self.locked()?;
+        let pattern = format!("{}*", self.prefix);
+        let keys: Vec<String> = conn
+            .scan_match(&pattern)
+            .map_err(|e| PhpxError::Runtime(format!("redis scan failed: {e}")))?
+            .map(|r| r.map_err(|e| PhpxError::Runtime(format!("redis scan failed: {e}"))))
+            .collect::<Result<Vec<_>>>()?;
+        let idx = self.index_key();
+        let bytes = self.bytes_key();
+        let mut n = 0usize;
+        for k in &keys {
+            if k == &idx || k == &bytes {
+                continue;
+            }
+            n += 1;
+        }
+        if !keys.is_empty() {
+            let _: usize = conn
+                .del(keys)
+                .map_err(|e| PhpxError::Runtime(format!("redis clear failed: {e}")))?;
+        }
+        Ok(n)
+    }
+
+    fn stats(&self) -> Result<CacheStats> {
+        use redis::Commands;
+        let mut conn = self.locked()?;
+        let entries: usize = conn
+            .zcard(self.index_key())
+            .map_err(|e| PhpxError::Runtime(format!("redis stats failed: {e}")))?;
+        let (hits, misses) = self.counters.lock().map(|c| *c).unwrap_or((0, 0));
+        Ok(CacheStats {
+            driver: self.driver_name.clone(),
+            entries,
+            hits,
+            misses,
+            max_entries: self.max_entries,
+            max_bytes: self.max_bytes,
+        })
+    }
+}
+
 /// Open a cache driver from config values (shared by CLI + future gateway use).
 pub fn open_cache(
     driver: &str,
     dir: Option<&str>,
     max_entries: usize,
     max_bytes: u64,
+    redis_url: Option<&str>,
 ) -> Result<Box<dyn CacheDriver>> {
     if driver.eq_ignore_ascii_case("memory") {
         Ok(Box::new(MemoryCache::new(max_entries, max_bytes)))
@@ -455,9 +716,30 @@ pub fn open_cache(
             max_entries,
             max_bytes,
         )?))
+    } else if driver.eq_ignore_ascii_case("redis") {
+        let url = redis_url
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                std::env::var("PHPX_REDIS_URL")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            })
+            .ok_or_else(|| {
+                PhpxError::Config(
+                    "cache.driver=redis requires [cache] url (e.g. redis://127.0.0.1:6379) or PHPX_REDIS_URL env"
+                        .to_string(),
+                )
+            })?;
+        Ok(Box::new(RedisCache::open(
+            &url,
+            "default",
+            max_entries,
+            max_bytes,
+        )?))
     } else {
         Err(PhpxError::Config(format!(
-            "cache.driver must be memory or filesystem, got {driver} (PHPX Redis deferred; app-native Redis via WordPress/Laravel REDIS_HOST tetap jalan tanpa PHPX driver)"
+            "cache.driver must be memory, filesystem or redis, got {driver}"
         )))
     }
 }

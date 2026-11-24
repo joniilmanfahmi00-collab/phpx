@@ -1,7 +1,8 @@
-# PHPX queue (M5 phase 1)
+# PHPX queue (M5 phase 1 + Redis follow-up)
 
-Status: phase 1 DONE (memory + sqlite, retries/backoff/dead-letter, durable ack, lease recovery).
-Scheduler DONE phase 2, cache/storage DONE phase 3 (see scheduler.md, cache.md, storage.md). PHPX Redis/S3-transport deferred. App-native Redis via WordPress/Laravel REDIS_HOST tetap jalan langsung dari PHP.
+Status: phase 1 DONE (memory + sqlite, retries/backoff/dead-letter, durable ack, lease recovery)
++ Redis driver (needs a server; `PHPX_REDIS_URL` or `[queue] url`).
+Scheduler DONE phase 2, cache/storage DONE phase 3 (see scheduler.md, cache.md, storage.md). App-native Redis via WordPress/Laravel REDIS_HOST tetap jalan langsung dari PHP.
 
 ## Drivers
 
@@ -12,8 +13,16 @@ Scheduler DONE phase 2, cache/storage DONE phase 3 (see scheduler.md, cache.md, 
   DB file at `[queue] database` (e.g. `./data/queue.db`).
   Parent dirs are auto-created. Running jobs are re-queued on open
   (forced-termination recovery). Ack deletes the row to keep the DB bounded.
-
-PHPX Redis driver deferred to later M5 (needs network + justification). App-native Redis tetap jalan via REDIS_HOST.
+- `redis`: shared/networked driver (same contract suite).
+  Server at `[queue] url` (e.g. `redis://127.0.0.1:6379`) or `PHPX_REDIS_URL` env.
+  Keys are namespaced (`phpx:q:<namespace>:`; CLI uses `default`, tests use a
+  uuid per case + `flush_namespace()` hygiene). Ready set is a ZSET scored by
+  visibility time (FIFO within the same second); leases/expiry behave like the
+  memory driver. `move` across processes is safe for distinct namespaces;
+  concurrent writers to one namespace are last-write-wins per job id (dev
+  scope: single gateway writer). Connection timeout 5s; failures surface as
+  `Runtime("redis ...")` (never silent). Secrets: the URL is never logged
+  (only the namespace appears in errors/metrics).
 
 ## Semantics (SPEC 7.1)
 
@@ -47,27 +56,29 @@ PHPX Redis driver deferred to later M5 (needs network + justification). App-nati
 
 ```toml
 [queue]
-driver = "sqlite" # memory | sqlite (redis deferred)
+driver = "sqlite" # memory | sqlite | redis
 database = "./data/queue.db" # required for sqlite
+url = "redis://127.0.0.1:6379" # required for redis (or PHPX_REDIS_URL env)
 workers = 2 # 1-16
 ```
 
 Validation (`phpx-config`): unknown driver exits 2, `workers` 1-16,
-sqlite without `database` exits 2. Cache driver `memory|filesystem` validated;
-redis deferred.
+sqlite without `database` exits 2, redis without `url` (and without
+`PHPX_REDIS_URL`) exits 2.
 
 ## Tests
 
-- `crates/phpx-queue/tests/contract.rs` (same suite vs both drivers):
-  enqueue/reserve/ack, retry-delayed, dead-letter, sqlite restart survival.
-- `cargo test -p phpx-queue` green (3 unit + 6 contract).
+- `crates/phpx-queue/tests/contract.rs` (same suite vs all drivers):
+  enqueue/reserve/ack, retry-delayed, dead-letter, sqlite restart survival,
+  redis namespace isolation. Redis cases run against live `PHPX_REDIS_URL`
+  and SKIP loudly without it.
+- `cargo test -p phpx-queue` green (3 unit + 10 contract).
 - CLI: `queue status` real (0), `scheduler run` real single-pass dispatch (0 + note when disabled, see `scheduler.md`).
 
 ## Deferred (later M5)
 
-- PHPX Redis driver (queue + cache) with integration justification (app-native Redis tetap jalan via WP/Laravel, tanpa PHPX).
 - Scheduler: DONE in phase 2 (cron parser, timezone, history, duplicate-dispatch protection) — see `scheduler.md`.
-- Cache: DONE in phase 3 (bounded memory + filesystem + contract tests) — see `cache.md`.
+- Cache: DONE in phase 3 (bounded memory + filesystem + Redis + contract tests) — see `cache.md`.
 - Storage: DONE in phase 3 (local FS real + S3 prototype) — see `storage.md`.
 - PHP dispatch for queue jobs (needs runtime-process integration off gateway threads).
 

@@ -1,7 +1,7 @@
 # PHPX scheduler (M5 phase 2)
 
 Status: phase 2 DONE — cron-compatible, timezone-aware, single-node dispatch-only.
-Queue phase 1 DONE. Cache/storage DONE phase 3 (see cache.md/storage.md). Redis/S3-transport deferred.
+Queue phase 1 DONE (memory + sqlite + Redis). Cache/storage DONE phase 3 (see cache.md/storage.md). S3-transport deferred.
 
 SPEC 7.2: scheduler **dispatches** jobs by enqueueing them into the queue.
 It never executes PHP work and must not run on gateway async threads.
@@ -140,8 +140,7 @@ sqlite history file — two writers will double-dispatch (documented limit).
 
 ## Deferred (later M5)
 
-- Redis adapter with integration justification.
-- Cache: DONE phase 3 (bounded memory + filesystem + contract tests) — see `cache.md`.
+- Cache: DONE phase 3 (bounded memory + filesystem + Redis + contract tests) — see `cache.md`.
 - Storage: DONE phase 3 (local FS real + S3 prototype) — see `storage.md`.
 - PHP dispatch for queue jobs (needs runtime-process integration off gateway threads).
 - Multi-node dispatch coordination (current dedup is single-node baseline).

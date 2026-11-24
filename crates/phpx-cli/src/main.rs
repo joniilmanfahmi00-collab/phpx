@@ -831,22 +831,27 @@ fn cmd_workers(config_arg: Option<PathBuf>, as_json: bool, cmd: WorkersCmd) -> i
 
 fn queue_driver_from_config(
     config_arg: Option<PathBuf>,
-) -> Result<(String, Option<String>, PathBuf), String> {
+) -> Result<(String, Option<String>, Option<String>, PathBuf), String> {
     let loaded = load_config(config_arg).map_err(|e| e.to_string())?;
     if let Err(e) = loaded.cfg.validate() {
         return Err(format!("{e} (config: {})", loaded.path.display()));
     }
-    let (driver, database) = match &loaded.cfg.queue {
-        Some(q) => (q.driver.clone(), q.database.clone()),
-        None => ("sqlite".to_string(), Some("./data/queue.db".to_string())),
+    let (driver, database, url) = match &loaded.cfg.queue {
+        Some(q) => (q.driver.clone(), q.database.clone(), q.url.clone()),
+        None => (
+            "sqlite".to_string(),
+            Some("./data/queue.db".to_string()),
+            None,
+        ),
     };
-    Ok((driver, database, loaded.path))
+    Ok((driver, database, url, loaded.path))
 }
 
 fn cmd_queue(config_arg: Option<PathBuf>, as_json: bool, cmd: QueueCmd) -> i32 {
     match cmd {
         QueueCmd::Status => {
-            let (driver, database, cfg_path) = match queue_driver_from_config(config_arg) {
+            let (driver, database, redis_url, cfg_path) = match queue_driver_from_config(config_arg)
+            {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("config error: {e}");
@@ -892,8 +897,12 @@ fn cmd_queue(config_arg: Option<PathBuf>, as_json: bool, cmd: QueueCmd) -> i32 {
                 }
                 return 0;
             }
-            match phpx_queue::open_queue(&driver, database.as_deref(), phpx_queue::MAX_QUEUE_DEPTH)
-            {
+            match phpx_queue::open_queue(
+                &driver,
+                database.as_deref(),
+                phpx_queue::MAX_QUEUE_DEPTH,
+                redis_url.as_deref(),
+            ) {
                 Ok(q) => {
                     match q.status() {
                         Ok(st) => {
@@ -940,7 +949,7 @@ fn cmd_queue(config_arg: Option<PathBuf>, as_json: bool, cmd: QueueCmd) -> i32 {
             max_retries,
             delay_secs,
         } => {
-            let (driver, database, _) = match queue_driver_from_config(config_arg) {
+            let (driver, database, redis_url, _) = match queue_driver_from_config(config_arg) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("config error: {e}");
@@ -948,11 +957,15 @@ fn cmd_queue(config_arg: Option<PathBuf>, as_json: bool, cmd: QueueCmd) -> i32 {
                 }
             };
             if driver.eq_ignore_ascii_case("memory") {
-                eprintln!("queue push refused: driver=memory is ephemeral (jobs would vanish on exit). Set [queue] driver=sqlite for durable push.");
+                eprintln!("queue push refused: driver=memory is ephemeral (jobs would vanish on exit). Set [queue] driver=sqlite (or redis) for durable push.");
                 return 2;
             }
-            match phpx_queue::open_queue(&driver, database.as_deref(), phpx_queue::MAX_QUEUE_DEPTH)
-            {
+            match phpx_queue::open_queue(
+                &driver,
+                database.as_deref(),
+                phpx_queue::MAX_QUEUE_DEPTH,
+                redis_url.as_deref(),
+            ) {
                 Ok(q) => match q.enqueue(&payload, max_retries.min(25), delay_secs.min(86400)) {
                     Ok(job) => {
                         if as_json {
@@ -985,7 +998,7 @@ fn cmd_queue(config_arg: Option<PathBuf>, as_json: bool, cmd: QueueCmd) -> i32 {
             max_jobs,
             visibility_timeout,
         } => {
-            let (driver, database, _) = match queue_driver_from_config(config_arg) {
+            let (driver, database, redis_url, _) = match queue_driver_from_config(config_arg) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("config error: {e}");
@@ -998,6 +1011,7 @@ fn cmd_queue(config_arg: Option<PathBuf>, as_json: bool, cmd: QueueCmd) -> i32 {
                 &driver,
                 database.as_deref(),
                 phpx_queue::MAX_QUEUE_DEPTH,
+                redis_url.as_deref(),
             ) {
                 Ok(q) => q,
                 Err(e) => {
@@ -1101,13 +1115,17 @@ fn cmd_scheduler(config_arg: Option<PathBuf>, as_json: bool, cmd: SchedulerCmd) 
             }
             // Scheduler only dispatches into the queue (SPEC 7.2); it never
             // executes PHP, so the runtime backend is irrelevant here.
-            let (driver, database) = match &loaded.cfg.queue {
-                Some(q) => (q.driver.clone(), q.database.clone()),
-                None => ("sqlite".to_string(), Some("./data/queue.db".to_string())),
+            let (driver, database, redis_url) = match &loaded.cfg.queue {
+                Some(q) => (q.driver.clone(), q.database.clone(), q.url.clone()),
+                None => (
+                    "sqlite".to_string(),
+                    Some("./data/queue.db".to_string()),
+                    None,
+                ),
             };
             if driver.eq_ignore_ascii_case("memory") && !dry_run {
                 eprintln!(
-                    "scheduler dispatch refused: driver=memory is ephemeral (jobs would vanish on exit). Set [queue] driver=sqlite for durable dispatch, or use --dry-run to preview."
+                    "scheduler dispatch refused: driver=memory is ephemeral (jobs would vanish on exit). Set [queue] driver=sqlite (or redis) for durable dispatch, or use --dry-run to preview."
                 );
                 return 2;
             }
@@ -1134,6 +1152,7 @@ fn cmd_scheduler(config_arg: Option<PathBuf>, as_json: bool, cmd: SchedulerCmd) 
                 &driver,
                 database.as_deref(),
                 phpx_queue::MAX_QUEUE_DEPTH,
+                redis_url.as_deref(),
             ) {
                 Ok(q) => q,
                 Err(e) => {
@@ -1340,7 +1359,7 @@ fn print_scheduler_outcome(
     println!("  note: scheduler only dispatches (enqueue); it never executes PHP (SPEC 7.2).");
 }
 
-type CacheCfg = (String, Option<String>, usize, u64, PathBuf);
+type CacheCfg = (String, Option<String>, usize, u64, Option<String>, PathBuf);
 type StorageCfg = (
     String,
     Option<String>,
@@ -1355,7 +1374,7 @@ fn cache_from_config(config_arg: Option<PathBuf>) -> Result<CacheCfg, String> {
     if let Err(e) = loaded.cfg.validate() {
         return Err(format!("{e} (config: {})", loaded.path.display()));
     }
-    let (driver, dir, max_entries, max_bytes) = match &loaded.cfg.cache {
+    let (driver, dir, max_entries, max_bytes, redis_url) = match &loaded.cfg.cache {
         Some(c) => {
             let entries = c.max_entries.unwrap_or(1000).clamp(1, 100_000);
             let bytes = match &c.max_memory {
@@ -1363,11 +1382,17 @@ fn cache_from_config(config_arg: Option<PathBuf>) -> Result<CacheCfg, String> {
                     .map_err(|e| format!("{e} (config: {})", loaded.path.display()))?,
                 None => 128 * 1024 * 1024,
             };
-            (c.driver.clone(), c.dir.clone(), entries, bytes)
+            (
+                c.driver.clone(),
+                c.dir.clone(),
+                entries,
+                bytes,
+                c.url.clone(),
+            )
         }
-        None => ("memory".to_string(), None, 1000, 128 * 1024 * 1024),
+        None => ("memory".to_string(), None, 1000, 128 * 1024 * 1024, None),
     };
-    Ok((driver, dir, max_entries, max_bytes, loaded.path))
+    Ok((driver, dir, max_entries, max_bytes, redis_url, loaded.path))
 }
 
 fn storage_from_config(config_arg: Option<PathBuf>) -> Result<StorageCfg, String> {
@@ -1395,14 +1420,21 @@ fn storage_from_config(config_arg: Option<PathBuf>) -> Result<StorageCfg, String
 }
 
 fn cmd_cache(config_arg: Option<PathBuf>, as_json: bool, cmd: CacheCmd) -> i32 {
-    let (driver, dir, max_entries, max_bytes, cfg_path) = match cache_from_config(config_arg) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("config error: {e}");
-            return 2;
-        }
-    };
-    let cache = match phpx_cache::open_cache(&driver, dir.as_deref(), max_entries, max_bytes) {
+    let (driver, dir, max_entries, max_bytes, redis_url, cfg_path) =
+        match cache_from_config(config_arg) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("config error: {e}");
+                return 2;
+            }
+        };
+    let cache = match phpx_cache::open_cache(
+        &driver,
+        dir.as_deref(),
+        max_entries,
+        max_bytes,
+        redis_url.as_deref(),
+    ) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("cache open failed: {e}");

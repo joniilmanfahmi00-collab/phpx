@@ -171,7 +171,7 @@ core server.
 
 -   [x] Add bounded in-memory cache (M5 phase 3 DONE: `phpx-cache` memory + `cache.md`).
 -   [x] Add filesystem cache (M5 phase 3 DONE: `phpx-cache` filesystem + contract).
--   [ ] Add Redis adapter if justified by integration needs (deferred, needs network + justification).
+-   [x] Add Redis adapter (queue + cache, shared server via `[queue]/[cache] url` or `PHPX_REDIS_URL`; same contract suites + namespace isolation + TTL-expiry pins).
 -   [x] Define storage interface (M5 phase 3 DONE: `StorageDriver` + `storage.md`).
 -   [x] Add local filesystem adapter (M5 phase 3 DONE: `LocalStorage` + contract).
 -   [x] Prototype S3-compatible adapter (M5 phase 3 DONE: `S3Prototype` config real, transport deferred + `storage.md`).
