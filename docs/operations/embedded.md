@@ -150,6 +150,15 @@ linked. Proves the gates hold in linked mode, not only in stub mode:
 | Windows x64 | 8.3.30 ZTS dev box | ZTS | rejected by AbiPin, process runtime active |
 | Docker bookworm | php:8.4 NTS CLI | NTS CLI | process runtime only, embed deferred |
 
+## Linked gate run (WSL Debian, 2026-11-24, P2 gates)
+
+- Toolchain: php-config 8.3.36 NTS + `/usr/include/php/20230831/sapi/embed/php_embed.h` + `libphp.so`; build log: `linked php-embed (php-config 8.3.36, libs=["php8.3", ...])`.
+- `PHPX_EMBED_LINK=1 cargo test -p phpx-runtime-embedded` = **42 lib + 16 contract, all green WITH libphp linked** (was 28 + 12 on 2026-11-19; +14 from the P2 gate modules).
+- Live `gates::assess()` on the linked build: **6 PASS + 3 HOLD, `available=false`** (fail-closed, correct):
+  - PASS: `abi_pin`, `native_link`, `execution_domain`, `ownership`, `containment`, `extensions` (live `php -m` 11/11 on the NTS build).
+  - HOLD: `isolation` (needs live Zend reset proof), `compat_parity` (no subset executes yet), `stability` (no archived linked soak).
+- Promotion flips mechanically when the three HOLDs turn PASS with archived evidence; no code path changes needed (`available()` derives from the assessor).
+
 ## WSL gate verification (M6 gates, 2026-11-19, WSL Debian)
 
 - G1 NTS: php -i shows Thread Safety disabled, Debug Build no, Zend Extension Build API420230831,NTS. PASS (NTS non-debug).
