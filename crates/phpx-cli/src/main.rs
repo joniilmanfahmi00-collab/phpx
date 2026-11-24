@@ -207,6 +207,14 @@ enum SchedulerCmd {
 }
 
 fn main() {
+    // Unix CLI hygiene: a closed stdout pipe (e.g. `phpx workers status |
+    // head -1`) must end the process with SIGPIPE like every other Unix tool,
+    // not panic with 101 when Rust's ignored-SIGPIPE turns EPIPE into an
+    // error. Windows has no SIGPIPE; nothing to do there.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let cli = Cli::parse();
     phpx_core::init_logging(cli.json);
 

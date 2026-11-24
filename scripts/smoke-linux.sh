@@ -64,18 +64,30 @@ code=$(curl -o /dev/null -s -w "%{http_code}" "http://127.0.0.1:$PORT/crash.php"
 if [ "$code" != "500" ]; then echo "FAIL: crash expected 500 got $code"; exit 1; fi
 curl -fsS "http://127.0.0.1:$PORT/" >/dev/null
 echo "[smoke] CLI contract ..."
+# Capture-then-match (never `cli | grep -q`): grep -q closes the pipe on the
+# first match, and any later CLI write would hit EPIPE (Rust panics with 101
+# instead of dying quietly). Bash pattern matching uses no pipe at all.
+check_contains() {
+  local needle="$1"; shift
+  local out
+  out=$("$@") || { echo "FAIL: $* exited $?"; exit 1; }
+  case "$out" in
+    *"$needle"*) ;;
+    *) echo "FAIL: '$*' output missing '$needle'"; exit 1 ;;
+  esac
+}
 "$BIN" doctor >/dev/null
-"$BIN" version | grep -q "developer preview"
-"$BIN" runtime list | grep -q process
-"$BIN" workers status | grep -q "bounded pool"
-"$BIN" metrics | grep -q "healthz"
-"$BIN" queue status | grep -q "driver="
-"$BIN" scheduler run | grep -qi "scheduler"
-"$BIN" --json scheduler run | grep -q dispatched
-"$BIN" cache status | grep -q "cache"
-"$BIN" --json cache status | grep -q entries
-"$BIN" cache set --key smoke --value ok | grep -qi "stored"
-"$BIN" storage status | grep -q "storage"
-"$BIN" --json storage status | grep -q objects
+check_contains "developer preview" "$BIN" version
+check_contains "process" "$BIN" runtime list
+check_contains "bounded pool" "$BIN" workers status
+check_contains "healthz" "$BIN" metrics
+check_contains "driver=" "$BIN" queue status
+check_contains "scheduler" "$BIN" scheduler run
+check_contains "dispatched" "$BIN" --json scheduler run
+check_contains "cache" "$BIN" cache status
+check_contains "entries" "$BIN" --json cache status
+check_contains "stored" "$BIN" cache set --key smoke --value ok
+check_contains "storage" "$BIN" storage status
+check_contains "objects" "$BIN" --json storage status
 
 echo "[smoke] ALL GREEN (M3+M5 developer preview: gateway + queue + scheduler + cache + storage)"
