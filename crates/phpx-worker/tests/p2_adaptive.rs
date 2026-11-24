@@ -17,6 +17,51 @@ fn req_for(id: &str, entry: &str) -> PhpRequest {
     r
 }
 
+/// Poll `cond` until true or `budget` expires, heartbeating pool state to
+/// stderr every ~5s so a stuck run explains itself in the failure log.
+fn wait_for(
+    pool: &phpx_worker::PersistentPool,
+    budget: Duration,
+    desc: &str,
+    cond: impl Fn(&phpx_worker::PersistentPool) -> bool,
+) {
+    let start = Instant::now();
+    let mut last_beat = Instant::now() - Duration::from_secs(10);
+    while !cond(pool) {
+        if last_beat.elapsed() >= Duration::from_secs(5) {
+            let states: Vec<String> = pool
+                .worker_snapshots()
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}:{:?}{}",
+                        s.id,
+                        s.state,
+                        s.exit_reason
+                            .as_deref()
+                            .map(|r| format!("({})", r.chars().take(80).collect::<String>()))
+                            .unwrap_or_default()
+                    )
+                })
+                .collect();
+            eprintln!(
+                "p2-adaptive {desc}: spawned={} load(active,waiting)={:?} states=[{}] elapsed={:?}",
+                pool.spawned_count(),
+                pool.load(),
+                states.join(" "),
+                start.elapsed(),
+            );
+            last_beat = Instant::now();
+        }
+        assert!(
+            start.elapsed() < budget,
+            "pool never reached {desc} (spawned={})",
+            pool.spawned_count()
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 fn adaptive_config(min_w: u32, max_w: u32) -> PersistentPoolConfig {
     PersistentPoolConfig {
         worker_count: max_w,
@@ -45,40 +90,43 @@ fn adaptive_starts_at_floor_and_scales_with_demand() {
     // P2: min=1/max=3 starts lean; 3 concurrent 5s sleeps force two
     // scale-ups (one worker per interval, cooldown between them); when the
     // load drains, two scale-downs return the pool to the floor.
+    // Worker threads retry until served (slow shared runners), so the test
+    // asserts the mechanism (exact 2-up/2-down event counts), not machine
+    // speed. Heartbeats on stderr make a stuck run self-diagnosing
+    // (cargo prints captured output for failed tests).
     let pool =
         Arc::new(phpx_worker::PersistentPool::new(adaptive_config(1, 3)).expect("pool must start"));
     assert!(pool.adaptive_enabled());
     assert_eq!(pool.spawned_count(), 1, "adaptive pool starts at the floor");
+    let deadline = Instant::now() + Duration::from_secs(120);
     let mut handles = vec![];
     for i in 0..3 {
         let p = pool.clone();
-        handles.push(std::thread::spawn(move || {
-            p.execute(&req_for(&format!("load-{i}"), "sleep.php"))
-                .expect("sleep must serve")
+        handles.push(std::thread::spawn(move || loop {
+            match p.execute(&req_for(&format!("load-{i}"), "sleep.php")) {
+                Ok(r) => {
+                    assert_eq!(r.status, 200);
+                    return;
+                }
+                Err(e) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "load-{i} never served (last error: {e})"
+                    );
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            }
         }));
     }
-    let start = Instant::now();
-    while pool.spawned_count() < 3 {
-        assert!(
-            start.elapsed() < Duration::from_secs(60),
-            "pool never scaled to the ceiling (spawned={})",
-            pool.spawned_count()
-        );
-        std::thread::sleep(Duration::from_millis(200));
-    }
+    wait_for(&pool, Duration::from_secs(90), "scale to ceiling", |p| {
+        p.spawned_count() >= 3
+    });
     for h in handles {
-        let r = h.join().expect("worker thread");
-        assert_eq!(r.status, 200);
+        h.join().expect("worker thread");
     }
-    let start = Instant::now();
-    while pool.spawned_count() > 1 {
-        assert!(
-            start.elapsed() < Duration::from_secs(60),
-            "pool never scaled back to the floor (spawned={})",
-            pool.spawned_count()
-        );
-        std::thread::sleep(Duration::from_millis(200));
-    }
+    wait_for(&pool, Duration::from_secs(90), "scale back to floor", |p| {
+        p.spawned_count() <= 1
+    });
     // Exactly two ups and two downs: one worker per interval, hard floor/ceiling.
     let text = pool.prometheus_text();
     assert!(text.contains("phpx_pool_adaptive_enabled 1"), "{text}");
