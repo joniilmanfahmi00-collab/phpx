@@ -343,6 +343,13 @@ pub fn build_state(cfg: &PhpxConfig) -> Result<Arc<AppState>> {
                 memory_sample_interval: Duration::from_secs(
                     proc.memory_sample_interval_seconds.max(1),
                 ),
+                adaptive_enabled: proc.adaptive_enabled,
+                adaptive_min_workers: proc.min_workers,
+                adaptive_interval: Duration::from_secs(proc.adaptive_interval_seconds.max(1)),
+                adaptive_cooldown: Duration::from_secs(proc.adaptive_cooldown_seconds.max(1)),
+                adaptive_scale_up_queue_depth: proc.adaptive_scale_up_queue_depth.max(1),
+                adaptive_scale_down_idle_intervals: proc.adaptive_scale_down_idle_intervals.max(1),
+                adaptive_memory_guard: proc.adaptive_memory_guard,
             })?))
         }
     };

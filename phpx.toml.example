@@ -74,6 +74,14 @@ shutdown_drain_timeout_seconds = 10
 restart_max_retries = 5
 restart_backoff_ms = 250
 restart_backoff_max_ms = 30000
+# P2 adaptive autoscale (persistent only, experimental opt-in; default off = fixed pool).
+# When true: start at min_workers, grow on sustained pressure up to workers, shrink when idle.
+# adaptive_enabled = false
+# adaptive_interval_seconds = 5
+# adaptive_cooldown_seconds = 30
+# adaptive_scale_up_queue_depth = 2
+# adaptive_scale_down_idle_intervals = 3
+# adaptive_memory_guard = true
 
 [runtime.embedded]
 # Keep false unless experimenting. mode=embedded requires enabled=true (experimental, process stays default).

@@ -57,6 +57,30 @@ Long-soak RSS slope stays observed-only for now (60-min archive: +3.6
 KB/min, flat band 324 KB): needs 6h/24h repeats before a slope cap can be set
 without flaking.
 
+## Adaptive autoscale (P2, experimental opt-in)
+
+Disabled by default (`adaptive_enabled=false` keeps the fixed pool above
+unchanged). When enabled, the pool starts at `min_workers`, grows on
+sustained pressure up to `workers`, and shrinks back when idle.
+
+- Signals: queued depth + active count vs spawned capacity (saturation =
+  every spawned worker busy with queue behind it); guardian memory pressure
+  (a recent soft/hard hit); crash-loop circuit state; drain state.
+- Safeguards: ceiling (`workers`), floor (`min_workers`, also the initial
+  size), one worker per evaluation interval, cooldown between actions,
+  scale-up needs `adaptive_scale_up_queue_depth` queued behind a saturated
+  pool, scale-down needs `adaptive_scale_down_idle_intervals` straight
+  all-idle evaluations, no scale-up under memory pressure or open circuit,
+  never while draining, highest-id-first retirement (low ids stay stable).
+- Law: pure function `adaptive_decide` (unit-tested matrix: saturate/up,
+  hysteresis/down, blocked-hold, memory-blocks-up-only, heal-to-range).
+- Observability: `phpx_pool_workers_current`,
+  `phpx_pool_adaptive_enabled{0,1}`,
+  `phpx_pool_adaptive_scale_events_total{direction=up|down}`; spares show as
+  `stopped` in per-worker series; `workers status` reports the tuning.
+- Evidence: `p2_adaptive` (floor start, pressure -> ceiling, idle -> floor,
+  exact event counts; fixed pool unchanged under the same load).
+
 ## Soak
 
 - CI gate (repeatable): `p1a: short_soak_mixed_workload_stays_healthy`

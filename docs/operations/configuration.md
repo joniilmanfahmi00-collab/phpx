@@ -64,6 +64,12 @@ request_timeout_seconds = 30
 | `runtime.process.restart_max_retries` | `5` | `0-100`. Consecutive-failure budget before crash-loop circuit opens (ADR-0014 2.6) |
 | `runtime.process.restart_backoff_ms` | `250` | `10-60000`. Base backoff for circuit window |
 | `runtime.process.restart_backoff_max_ms` | `30000` | `>= base`, `<=300000`. Backoff cap (exponential + jitter) |
+| `runtime.process.adaptive_enabled` | `false` | P2 adaptive (persistent only, experimental opt-in): start at `min_workers`, grow on sustained pressure up to `workers`, shrink when idle. `false` = fixed pool of `workers` (default, unchanged behavior) |
+| `runtime.process.adaptive_interval_seconds` | `5` | `1-60`. Control-loop evaluation period |
+| `runtime.process.adaptive_cooldown_seconds` | `30` | `1-300`. Quiet period between scale actions (anti-flap, with hysteresis) |
+| `runtime.process.adaptive_scale_up_queue_depth` | `2` | `1-10000`. Scale up when `waiting` reaches this AND every spawned worker is busy |
+| `runtime.process.adaptive_scale_down_idle_intervals` | `3` | `1-360`. Scale down after this many straight all-idle evaluations |
+| `runtime.process.adaptive_memory_guard` | `true` | Refuse scale-up while a worker shows guardian memory pressure (scale-down still allowed) |
 | `runtime.embedded.enabled` | `false` | Experimental opt-in since M6.1 (stub: available=false); process stays default |
 | `queue.driver` | `"sqlite"` | `memory` (ephemeral dev) / `sqlite` (durable) / `redis` (shared server). `queue status` real exit 0 (M5 phase 1 + Redis) |
 | `queue.database` | `"./data/queue.db"` | Required when `driver=sqlite` |
@@ -107,7 +113,8 @@ request_timeout_seconds = 30
 - `application.root` / `entrypoint` must be non-empty; docroot must exist and entry file must exist at startup.
 - `runtime.mode` must be `process` or `embedded`; `embedded` without `[runtime.embedded] enabled=true` is rejected.
 - `workers` must be `1-1024`, `min_workers <= workers`, bounds per key (see table).
-- `runtime.process.execution_mode` must be `one-shot` or `persistent` (P0-B: both runnable; persistent = fixed-size supervised pool).
+  With `adaptive_enabled=true`, `workers` is the ceiling and `min_workers` the floor + initial size.
+- `runtime.process.execution_mode` must be `one-shot` or `persistent` (P0-B: both runnable; persistent = fixed-size supervised pool, or adaptive when enabled).
 - Enforcement points (P0-C): `memory_limit` = PHP heap (`-d`, Zend only, both modes);
   `memory_soft_limit`/`memory_hard_limit` = OS RSS supervisor policy (persistent
   workers only); soft must be < hard when both set; `memory_sample_interval_seconds` 1-60.

@@ -168,8 +168,85 @@ pub struct RecoverySnapshot {
     pub age_secs: u64,
 }
 
+/// P2 adaptive scale decision (pure: unit-tested, no I/O).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdaptiveAction {
+    Hold,
+    ScaleUp,
+    ScaleDown,
+}
+
+/// P2 adaptive live observation (one control-loop evaluation).
+#[derive(Debug, Clone, Copy)]
+pub struct AdaptiveSignal {
+    /// Queued requests still waiting for a worker.
+    pub waiting: usize,
+    /// Requests currently executing.
+    pub active: usize,
+    /// Spawned workers (slots not parked as Stopped spares).
+    pub current: usize,
+    /// Consecutive all-idle evaluations so far (caller bumps on Hold).
+    pub idle_streak: u32,
+    /// A worker recently hit a guardian soft/hard limit.
+    pub memory_pressure: bool,
+    /// Draining, crash-loop circuit open, or inside the cooldown.
+    pub blocked: bool,
+}
+
+/// P2 adaptive tuning (the subset of the pool config the law needs).
+#[derive(Debug, Clone, Copy)]
+pub struct AdaptiveTuning {
+    /// Floor (and initial size when adaptive is enabled).
+    pub min_w: usize,
+    /// Ceiling (`worker_count`).
+    pub max_w: usize,
+    /// Scale-up trigger: queued requests at/over this while saturated.
+    pub up_depth: usize,
+    /// Scale-down trigger: consecutive all-idle evaluations.
+    pub down_intervals: u32,
+}
+
+/// P2 adaptive control law. One worker per evaluation at most; the caller
+/// (control loop) enforces the interval, the cooldown, and the idle streak.
+///
+/// - `blocked` (draining/circuit/cooldown) always holds.
+/// - `memory_pressure` blocks scale-up only (healing the floor and
+///   scale-down still allowed).
+/// - Scale-up: every spawned worker busy (`active >= current`) with
+///   `waiting >= up_depth` queued behind them, below the ceiling.
+/// - Scale-down: strictly more than the floor, fully idle
+///   (`waiting == 0 && active == 0`) for `down_intervals` straight evaluations.
+/// - Out-of-range drift self-heals toward [min, max].
+pub fn adaptive_decide(sig: AdaptiveSignal, tun: AdaptiveTuning) -> AdaptiveAction {
+    if sig.blocked {
+        return AdaptiveAction::Hold;
+    }
+    if sig.current < tun.min_w {
+        return AdaptiveAction::ScaleUp;
+    }
+    if sig.current > tun.max_w {
+        return AdaptiveAction::ScaleDown;
+    }
+    if sig.current < tun.max_w
+        && sig.waiting >= tun.up_depth
+        && sig.active >= sig.current
+        && !sig.memory_pressure
+    {
+        return AdaptiveAction::ScaleUp;
+    }
+    if sig.current > tun.min_w
+        && sig.waiting == 0
+        && sig.active == 0
+        && sig.idle_streak + 1 >= tun.down_intervals
+    {
+        return AdaptiveAction::ScaleDown;
+    }
+    AdaptiveAction::Hold
+}
+
 // ---------------------------------------------------------------------------
-// Pool configuration (fixed-size supervised pool; adaptive stays deferred).
+// Pool configuration (fixed-size supervised pool by default; P2 adaptive
+// scaling is opt-in via `adaptive_enabled` and stays off unless configured).
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
@@ -195,6 +272,25 @@ pub struct PersistentPoolConfig {
     pub memory_hard_bytes: u64,
     /// P0-C guardian: idle-worker sampling period.
     pub memory_sample_interval: Duration,
+    /// P2 adaptive: disabled by default (fixed pool). When enabled, the pool
+    /// starts at `adaptive_min_workers`, grows on sustained pressure up to
+    /// `worker_count` (ceiling), and shrinks back when idle. One worker per
+    /// interval at most; cooldown + hysteresis prevent oscillation.
+    pub adaptive_enabled: bool,
+    /// P2 adaptive floor (and initial size when enabled). Must be 1..=worker_count.
+    pub adaptive_min_workers: u32,
+    /// P2 adaptive control-loop period.
+    pub adaptive_interval: Duration,
+    /// P2 adaptive quiet period between scale actions (anti-flap).
+    pub adaptive_cooldown: Duration,
+    /// P2 adaptive scale-up trigger: queued requests at/over this while every
+    /// spawned worker is busy.
+    pub adaptive_scale_up_queue_depth: usize,
+    /// P2 adaptive scale-down trigger: consecutive all-idle evaluations.
+    pub adaptive_scale_down_idle_intervals: u32,
+    /// P2 adaptive host safeguard: refuse scale-up while any worker shows
+    /// memory pressure (guardian soft/hard signal). Scale-down still allowed.
+    pub adaptive_memory_guard: bool,
 }
 
 impl Default for PersistentPoolConfig {
@@ -216,6 +312,13 @@ impl Default for PersistentPoolConfig {
             memory_soft_bytes: 0,
             memory_hard_bytes: 0,
             memory_sample_interval: Duration::from_secs(5),
+            adaptive_enabled: false,
+            adaptive_min_workers: 1,
+            adaptive_interval: Duration::from_secs(5),
+            adaptive_cooldown: Duration::from_secs(30),
+            adaptive_scale_up_queue_depth: 2,
+            adaptive_scale_down_idle_intervals: 3,
+            adaptive_memory_guard: true,
         }
     }
 }
@@ -258,6 +361,36 @@ impl PersistentPoolConfig {
             return Err(PhpxError::Config(
                 "memory_sample_interval must be 1-60s".to_string(),
             ));
+        }
+        if self.adaptive_interval.is_zero() || self.adaptive_interval > Duration::from_secs(60) {
+            return Err(PhpxError::Config(
+                "adaptive_interval must be 1-60s".to_string(),
+            ));
+        }
+        if self.adaptive_cooldown > Duration::from_secs(300) {
+            return Err(PhpxError::Config(
+                "adaptive_cooldown must be 0-300s".to_string(),
+            ));
+        }
+        if self.adaptive_scale_up_queue_depth == 0 || self.adaptive_scale_up_queue_depth > 10_000 {
+            return Err(PhpxError::Config(
+                "adaptive_scale_up_queue_depth must be 1-10000".to_string(),
+            ));
+        }
+        if self.adaptive_scale_down_idle_intervals == 0
+            || self.adaptive_scale_down_idle_intervals > 360
+        {
+            return Err(PhpxError::Config(
+                "adaptive_scale_down_idle_intervals must be 1-360".to_string(),
+            ));
+        }
+        if self.adaptive_enabled
+            && (self.adaptive_min_workers == 0 || self.adaptive_min_workers > self.worker_count)
+        {
+            return Err(PhpxError::Config(format!(
+                "adaptive_min_workers ({}) must be 1..=worker_count ({})",
+                self.adaptive_min_workers, self.worker_count
+            )));
         }
         Ok(())
     }
@@ -479,9 +612,20 @@ struct PoolShared {
     restarts: u64,
     active: usize,
     recycling: bool,
+    // P2 adaptive observations (guarded by the same lock).
+    /// Currently spawned workers (slots not Stopped).
+    spawned: usize,
+    scale_ups: u64,
+    scale_downs: u64,
+    last_scale_at: Option<Instant>,
+    /// Consecutive control-loop evaluations with zero load.
+    idle_streak: u32,
+    /// Set when a worker hits a guardian soft/hard limit; cleared by the
+    /// next Below sample. Blocks scale-up only (memory safeguard).
+    memory_pressure: bool,
 }
 
-/// Fixed-size supervised pool of long-lived PHP workers (P0-B).
+/// Supervised pool of long-lived PHP workers (P0-B fixed-size by default).
 ///
 /// Exactly one request per worker at a time. Blocking pipe I/O runs on the
 /// calling thread, which the gateway invokes via `spawn_blocking` (ADR-0006),
@@ -711,10 +855,23 @@ impl PersistentPool {
             .script_path
             .clone()
             .unwrap_or_else(materialize_worker_script);
+        // Capacity is always `worker_count` slots. Fixed mode spawns all of
+        // them; adaptive mode spawns `adaptive_min_workers` and parks the
+        // rest as Stopped spares that later scale-ups can claim.
+        let initial = if cfg.adaptive_enabled {
+            cfg.adaptive_min_workers
+        } else {
+            cfg.worker_count
+        };
         let mut slots = Vec::with_capacity(cfg.worker_count as usize);
         let mut first_errors: Vec<String> = Vec::new();
         for id in 0..cfg.worker_count {
             let mut slot = WorkerSlot::fresh(id as u64);
+            if id >= initial {
+                slot.state = WorkerState::Stopped;
+                slots.push(Mutex::new(slot));
+                continue;
+            }
             match spawn_supervised(
                 &cfg.php_bin,
                 &script_path,
@@ -765,10 +922,24 @@ impl PersistentPool {
                     shared: Arc::new((Mutex::new(PoolShared::default()), Condvar::new())),
                     stop_sampler: std::sync::atomic::AtomicBool::new(false),
                 });
+                // Spawned capacity: everything not parked as a spare.
+                // (Failed initial slots still occupy capacity; the demand
+                // path retries them, and adaptive healing tops up.)
+                let spawned = inner
+                    .slots
+                    .iter()
+                    .filter(|m| m.lock().unwrap().state != WorkerState::Stopped)
+                    .count();
+                inner.shared.0.lock().unwrap().spawned = spawned;
                 // P0-C guardian sampler (only when a limit is configured).
                 if inner.cfg.memory_soft_bytes > 0 || inner.cfg.memory_hard_bytes > 0 {
                     let sampler = inner.clone();
                     std::thread::spawn(move || sampler_loop(sampler));
+                }
+                // P2 adaptive control loop (only when explicitly enabled).
+                if inner.cfg.adaptive_enabled {
+                    let ctl = inner.clone();
+                    std::thread::spawn(move || adaptive_loop(ctl));
                 }
                 inner
             },
@@ -826,6 +997,18 @@ impl PersistentPool {
             .iter()
             .filter(|m| m.lock().unwrap().state == WorkerState::Ready)
             .count()
+    }
+
+    /// Currently spawned workers (slots not parked as Stopped spares).
+    /// Fixed mode: always `worker_count`. Adaptive mode: between
+    /// `adaptive_min_workers` and `worker_count`.
+    pub fn spawned_count(&self) -> usize {
+        self.inner.shared.0.lock().unwrap().spawned
+    }
+
+    /// Whether P2 adaptive scaling is enabled on this pool.
+    pub fn adaptive_enabled(&self) -> bool {
+        self.inner.cfg.adaptive_enabled
     }
 
     fn record_rejected(&self) {
@@ -1249,7 +1432,7 @@ impl PersistentPool {
         let snaps = self.worker_snapshots();
         let sh = self.inner.shared.0.lock().unwrap();
         let mut out = format!(
-            "# HELP phpx_execution_mode_info Selected execution mode (P0-B: persistent supervised pool).\n# TYPE phpx_execution_mode_info gauge\nphpx_execution_mode_info{{execution_mode=\"persistent\",protocol_version=\"{}\"}} 1\n# HELP phpx_pool_completed_total Completed PHP executions.\n# TYPE phpx_pool_completed_total counter\nphpx_pool_completed_total {}\n# HELP phpx_pool_failed_total Failed PHP executions (non-200).\n# TYPE phpx_pool_failed_total counter\nphpx_pool_failed_total {}\n# HELP phpx_pool_timeouts_total Execution timeouts (HTTP 504).\n# TYPE phpx_pool_timeouts_total counter\nphpx_pool_timeouts_total {}\n# HELP phpx_pool_rejected_overload_total Rejected by backpressure (HTTP 503).\n# TYPE phpx_pool_rejected_overload_total counter\nphpx_pool_rejected_overload_total {}\n# HELP phpx_pool_recycled_total Graceful worker replacements.\n# TYPE phpx_pool_recycled_total counter\nphpx_pool_recycled_total {}\n# HELP phpx_pool_restarts_total Worker restarts after failures.\n# TYPE phpx_pool_restarts_total counter\nphpx_pool_restarts_total {}\n# HELP phpx_pool_circuit_breaks_total Crash-loop circuit openings.\n# TYPE phpx_pool_circuit_breaks_total counter\nphpx_pool_circuit_breaks_total {}\n# HELP phpx_pool_active Currently executing requests.\n# TYPE phpx_pool_active gauge\nphpx_pool_active {}\n# HELP phpx_pool_waiting Currently queued requests.\n# TYPE phpx_pool_waiting gauge\nphpx_pool_waiting {}\n# HELP phpx_pool_max_workers Configured fixed worker count.\n# TYPE phpx_pool_max_workers gauge\nphpx_pool_max_workers {}\n# HELP phpx_pool_min_workers Configured fixed worker count (persistent pool is fixed-size).\n# TYPE phpx_pool_min_workers gauge\nphpx_pool_min_workers {}\n",
+            "# HELP phpx_execution_mode_info Selected execution mode (P0-B: persistent supervised pool).\n# TYPE phpx_execution_mode_info gauge\nphpx_execution_mode_info{{execution_mode=\"persistent\",protocol_version=\"{}\"}} 1\n# HELP phpx_pool_completed_total Completed PHP executions.\n# TYPE phpx_pool_completed_total counter\nphpx_pool_completed_total {}\n# HELP phpx_pool_failed_total Failed PHP executions (non-200).\n# TYPE phpx_pool_failed_total counter\nphpx_pool_failed_total {}\n# HELP phpx_pool_timeouts_total Execution timeouts (HTTP 504).\n# TYPE phpx_pool_timeouts_total counter\nphpx_pool_timeouts_total {}\n# HELP phpx_pool_rejected_overload_total Rejected by backpressure (HTTP 503).\n# TYPE phpx_pool_rejected_overload_total counter\nphpx_pool_rejected_overload_total {}\n# HELP phpx_pool_recycled_total Graceful worker replacements.\n# TYPE phpx_pool_recycled_total counter\nphpx_pool_recycled_total {}\n# HELP phpx_pool_restarts_total Worker restarts after failures.\n# TYPE phpx_pool_restarts_total counter\nphpx_pool_restarts_total {}\n# HELP phpx_pool_circuit_breaks_total Crash-loop circuit openings.\n# TYPE phpx_pool_circuit_breaks_total counter\nphpx_pool_circuit_breaks_total {}\n# HELP phpx_pool_active Currently executing requests.\n# TYPE phpx_pool_active gauge\nphpx_pool_active {}\n# HELP phpx_pool_waiting Currently queued requests.\n# TYPE phpx_pool_waiting gauge\nphpx_pool_waiting {}\n# HELP phpx_pool_max_workers Configured fixed worker count.\n# TYPE phpx_pool_max_workers gauge\nphpx_pool_max_workers {}\n# HELP phpx_pool_min_workers Configured worker count floor (fixed pool size, or adaptive floor from min_workers).\n# TYPE phpx_pool_min_workers gauge\nphpx_pool_min_workers {}\n# HELP phpx_pool_workers_current Currently spawned workers (adaptive spares excluded; fixed mode always equals max).\n# TYPE phpx_pool_workers_current gauge\nphpx_pool_workers_current {}\n# HELP phpx_pool_adaptive_enabled Adaptive scaling enabled (1) or fixed pool (0).\n# TYPE phpx_pool_adaptive_enabled gauge\nphpx_pool_adaptive_enabled {}\n# HELP phpx_pool_adaptive_scale_events_total Scale actions by direction (up = spare claimed and spawned, down = idle worker retired).\n# TYPE phpx_pool_adaptive_scale_events_total counter\nphpx_pool_adaptive_scale_events_total{{direction=\"up\"}} {}\nphpx_pool_adaptive_scale_events_total{{direction=\"down\"}} {}\n",
             PROTOCOL_VERSION,
             sh.completed,
             sh.failed,
@@ -1262,6 +1445,10 @@ impl PersistentPool {
             sh.waiting,
             self.inner.cfg.worker_count,
             self.inner.cfg.worker_count,
+            sh.spawned,
+            u64::from(self.inner.cfg.adaptive_enabled),
+            sh.scale_ups,
+            sh.scale_downs,
         );
         out.push_str(
             "# HELP phpx_worker_state Supervised worker state (0=starting,1=ready,2=busy,3=draining,4=stopped,5=unhealthy,6=restarting,7=failed).\n# TYPE phpx_worker_state gauge\n",
@@ -1515,6 +1702,170 @@ impl Inner {
         }
     }
 
+    /// P2 adaptive scale-up: claim one Stopped spare and spawn into it.
+    /// The spare is marked Starting under its lock first, so the (slow)
+    /// spawn runs unlocked and admissions/metrics keep flowing. On spawn
+    /// failure the spare parks back to Stopped with a diagnostic; the
+    /// cooldown (set on every attempt) prevents a hot spawn loop.
+    fn adaptive_scale_up(&self) -> bool {
+        let reserved: Option<usize> =
+            (0..self.slots.len()).find(|&i| match self.slots[i].try_lock() {
+                Ok(mut s) => {
+                    if s.state == WorkerState::Stopped && s.child.is_none() {
+                        s.state = WorkerState::Starting;
+                        s.consecutive_startup_failures = 0;
+                        s.exit_reason = None;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Err(_) => false,
+            });
+        let Some(idx) = reserved else {
+            return false;
+        };
+        let attempt = spawn_supervised(
+            &self.cfg.php_bin,
+            &self.script_path,
+            self.cfg.startup_timeout,
+            self.cfg.php_memory_limit.as_deref(),
+        );
+        let mut s = self.slots[idx].lock().unwrap();
+        if s.state != WorkerState::Starting || s.child.is_some() {
+            // Lost a race (drain/teardown touched the spare): no orphaned
+            // processes — reap the stray child if we spawned one.
+            drop(s);
+            if let Ok((mut wc, _, _)) = attempt {
+                let _ = wc.child.kill();
+                let _ = wc.child.wait();
+            }
+            return false;
+        }
+        match attempt {
+            Ok((wc, pid, startup_ms)) => {
+                s.child = Some(wc);
+                s.pid = Some(pid);
+                s.incarnation += 1;
+                s.started_at = Some(Instant::now());
+                s.completed = 0;
+                s.reset_incarnation_stats();
+                s.startup_duration_ms = startup_ms;
+                s.apply(WorkerEvent::HandshakeOk);
+                let (lock, cvar) = &*self.shared;
+                let mut sh = lock.lock().unwrap();
+                sh.spawned += 1;
+                sh.scale_ups += 1;
+                sh.last_scale_at = Some(Instant::now());
+                sh.idle_streak = 0;
+                drop(sh);
+                cvar.notify_all();
+                true
+            }
+            Err(e) => {
+                s.state = WorkerState::Stopped;
+                s.exit_reason = Some(format!("adaptive scale-up deferred: {e}"));
+                let (lock, _) = &*self.shared;
+                lock.lock().unwrap().last_scale_at = Some(Instant::now());
+                false
+            }
+        }
+    }
+
+    /// P2 adaptive scale-down: retire one idle (Ready) worker to a Stopped
+    /// spare, preferring the highest id so low ids stay stable for metrics.
+    /// The slot lock is held from the Ready re-check through the kill, so no
+    /// claim can interleave (claims need Assign under the same lock).
+    fn adaptive_scale_down(&self) -> bool {
+        for m in self.slots.iter().rev() {
+            let Ok(mut s) = m.try_lock() else {
+                continue;
+            };
+            if s.state != WorkerState::Ready {
+                continue;
+            }
+            if let Some(mut wc) = s.child.take() {
+                let t0 = Instant::now();
+                let _ = wc.child.kill();
+                let _ = wc.child.wait();
+                s.shutdown_duration_ms = t0.elapsed().as_millis() as u64;
+            }
+            s.pid = None;
+            s.apply(WorkerEvent::Shutdown);
+            s.exit_reason = None;
+            let (lock, cvar) = &*self.shared;
+            let mut sh = lock.lock().unwrap();
+            sh.spawned = sh.spawned.saturating_sub(1);
+            sh.scale_downs += 1;
+            sh.last_scale_at = Some(Instant::now());
+            sh.idle_streak = 0;
+            drop(sh);
+            cvar.notify_all();
+            return true;
+        }
+        false
+    }
+
+    /// P2 adaptive control evaluation: snapshot signals, decide, act.
+    /// Never blocks on slot locks (try_lock only); a contested view simply
+    /// defers action to the next interval.
+    fn adaptive_tick(&self) {
+        let (waiting, active, spawned, idle_streak, memory_pressure, blocked) = {
+            let (lock, _) = &*self.shared;
+            let sh = lock.lock().unwrap();
+            if sh.draining {
+                return;
+            }
+            let circuit_open = sh
+                .circuit_open_until
+                .map(|t| Instant::now() < t)
+                .unwrap_or(false);
+            let cooldown_ok = sh
+                .last_scale_at
+                .map(|t| t.elapsed() >= self.cfg.adaptive_cooldown)
+                .unwrap_or(true);
+            (
+                sh.waiting,
+                sh.active,
+                sh.spawned,
+                sh.idle_streak,
+                self.cfg.adaptive_memory_guard && sh.memory_pressure,
+                circuit_open || !cooldown_ok,
+            )
+        };
+        let all_idle = waiting == 0 && active == 0;
+        let sig = AdaptiveSignal {
+            waiting,
+            active,
+            current: spawned,
+            idle_streak,
+            memory_pressure,
+            blocked,
+        };
+        let tun = AdaptiveTuning {
+            min_w: self.cfg.adaptive_min_workers as usize,
+            max_w: self.cfg.worker_count as usize,
+            up_depth: self.cfg.adaptive_scale_up_queue_depth,
+            down_intervals: self.cfg.adaptive_scale_down_idle_intervals,
+        };
+        match adaptive_decide(sig, tun) {
+            AdaptiveAction::Hold => {
+                let (lock, _) = &*self.shared;
+                let mut sh = lock.lock().unwrap();
+                if all_idle {
+                    sh.idle_streak = sh.idle_streak.saturating_add(1);
+                } else {
+                    sh.idle_streak = 0;
+                }
+            }
+            AdaptiveAction::ScaleUp => {
+                self.adaptive_scale_up();
+            }
+            AdaptiveAction::ScaleDown => {
+                self.adaptive_scale_down();
+            }
+        }
+    }
     /// P0-C: sample one worker's OS RSS and enforce soft/hard policy.
     /// Called with the slot guard held, when the worker is idle (Ready):
     /// from request completion and from the sampler thread.
@@ -1541,10 +1892,12 @@ impl Inner {
             crate::memory::MemoryClass::Below => {
                 slot.healthy = true;
                 slot.last_ok_at = Some(now);
+                self.shared.0.lock().unwrap().memory_pressure = false;
             }
             crate::memory::MemoryClass::Soft => {
                 slot.soft_hits += 1;
                 slot.healthy = false;
+                self.shared.0.lock().unwrap().memory_pressure = true;
                 let pid_before = slot.pid;
                 self.recycle_locked(slot, "soft-limit");
                 // recycle_locked resets incarnation stats on success; when
@@ -1556,6 +1909,7 @@ impl Inner {
             crate::memory::MemoryClass::Hard => {
                 slot.hard_hits += 1;
                 slot.healthy = false;
+                self.shared.0.lock().unwrap().memory_pressure = true;
                 let pid_before = slot.pid;
                 let reason = format!(
                     "hard memory limit: rss={} >= hard={}",
@@ -1570,6 +1924,29 @@ impl Inner {
                 }
             }
         }
+    }
+}
+
+/// P2 adaptive control loop: one evaluation per `adaptive_interval`.
+/// Sleeps in small chunks so pool teardown stops the thread promptly
+/// (shares `stop_sampler` with the guardian loop). Never touches Busy
+/// workers; scale-down only retires Ready slots under their own lock.
+fn adaptive_loop(inner: Arc<Inner>) {
+    use std::sync::atomic::Ordering;
+    let interval = inner.cfg.adaptive_interval.max(Duration::from_secs(1));
+    let step = Duration::from_millis(250);
+    let mut slept = Duration::ZERO;
+    loop {
+        if inner.stop_sampler.load(Ordering::Relaxed) {
+            return;
+        }
+        std::thread::sleep(step.min(interval.saturating_sub(slept).max(Duration::from_millis(1))));
+        slept += step;
+        if slept < interval {
+            continue;
+        }
+        slept = Duration::ZERO;
+        inner.adaptive_tick();
     }
 }
 
@@ -1676,6 +2053,80 @@ mod tests {
         let b30 = cfg.backoff_for_retry(30);
         assert!(b3 > b0);
         assert!(b30 <= cfg.restart_backoff_max * 2);
+    }
+
+    /// P2 adaptive control law (pure decision, no pool needed).
+    /// Floor 1, ceiling 4, up_depth 2, down_intervals 3.
+    fn decide(
+        waiting: usize,
+        active: usize,
+        current: usize,
+        idle_streak: u32,
+        memory_pressure: bool,
+        blocked: bool,
+    ) -> AdaptiveAction {
+        adaptive_decide(
+            AdaptiveSignal {
+                waiting,
+                active,
+                current,
+                idle_streak,
+                memory_pressure,
+                blocked,
+            },
+            AdaptiveTuning {
+                min_w: 1,
+                max_w: 4,
+                up_depth: 2,
+                down_intervals: 3,
+            },
+        )
+    }
+
+    #[test]
+    fn adaptive_scales_up_only_when_saturated_and_queued() {
+        use AdaptiveAction::*;
+        // 1/1 busy + 2 queued -> up.
+        assert_eq!(decide(2, 1, 1, 0, false, false), ScaleUp);
+        // Below the queue-depth trigger -> hold.
+        assert_eq!(decide(1, 1, 1, 0, false, false), Hold);
+        // Spare capacity idle (a Ready worker would claim first) -> hold.
+        assert_eq!(decide(2, 0, 2, 0, false, false), Hold);
+        // At the ceiling -> hold even under pressure.
+        assert_eq!(decide(9, 4, 4, 0, false, false), Hold);
+        // Memory pressure blocks scale-up (guardian is already recycling).
+        assert_eq!(decide(9, 2, 2, 0, true, false), Hold);
+        // Cooldown / circuit / drain (blocked) -> hold.
+        assert_eq!(decide(9, 2, 2, 0, false, true), Hold);
+    }
+
+    #[test]
+    fn adaptive_scales_down_only_after_idle_hysteresis() {
+        use AdaptiveAction::*;
+        // Three straight all-idle evals: hold, hold, down.
+        assert_eq!(decide(0, 0, 3, 0, false, false), Hold);
+        assert_eq!(decide(0, 0, 3, 1, false, false), Hold);
+        assert_eq!(decide(0, 0, 3, 2, false, false), ScaleDown);
+        // Any load resets the case -> hold.
+        assert_eq!(decide(1, 0, 3, 2, false, false), Hold);
+        assert_eq!(decide(0, 1, 3, 2, false, false), Hold);
+        // At the floor -> hold even when idle.
+        assert_eq!(decide(0, 0, 1, 9, false, false), Hold);
+        // Blocked (cooldown/circuit/drain) -> hold.
+        assert_eq!(decide(0, 0, 3, 9, false, true), Hold);
+        // Memory pressure does NOT block scale-down.
+        assert_eq!(decide(0, 0, 3, 9, true, false), ScaleDown);
+    }
+
+    #[test]
+    fn adaptive_heals_toward_configured_range() {
+        use AdaptiveAction::*;
+        // Below the floor -> up (unless blocked).
+        assert_eq!(decide(0, 0, 0, 0, false, false), ScaleUp);
+        assert_eq!(decide(0, 0, 0, 0, true, false), ScaleUp);
+        assert_eq!(decide(0, 0, 0, 0, false, true), Hold);
+        // Above the ceiling -> down.
+        assert_eq!(decide(0, 0, 9, 0, false, false), ScaleDown);
     }
 
     #[test]

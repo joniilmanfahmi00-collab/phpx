@@ -108,6 +108,28 @@ pub struct RuntimeProcessConfig {
     pub restart_backoff_ms: u64,
     #[serde(default = "default_backoff_max_ms")]
     pub restart_backoff_max_ms: u64,
+    /// P2 adaptive: disabled by default (fixed pool). When true, the pool
+    /// starts at `min_workers`, grows on sustained pressure up to `workers`
+    /// (ceiling), and shrinks back when idle.
+    #[serde(default)]
+    pub adaptive_enabled: bool,
+    /// P2 adaptive control-loop period, 1-60s.
+    #[serde(default = "default_adaptive_interval")]
+    pub adaptive_interval_seconds: u64,
+    /// P2 adaptive quiet period between scale actions, 1-300s (anti-flap).
+    #[serde(default = "default_adaptive_cooldown")]
+    pub adaptive_cooldown_seconds: u64,
+    /// P2 adaptive scale-up trigger: queued requests at/over this while every
+    /// spawned worker is busy, 1-10000.
+    #[serde(default = "default_adaptive_up_depth")]
+    pub adaptive_scale_up_queue_depth: usize,
+    /// P2 adaptive scale-down trigger: consecutive all-idle evaluations, 1-360.
+    #[serde(default = "default_adaptive_down_intervals")]
+    pub adaptive_scale_down_idle_intervals: u32,
+    /// P2 adaptive host safeguard: refuse scale-up under guardian memory
+    /// pressure (scale-down still allowed).
+    #[serde(default = "default_true")]
+    pub adaptive_memory_guard: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
@@ -271,6 +293,18 @@ fn default_backoff_ms() -> u64 {
 fn default_backoff_max_ms() -> u64 {
     30000
 }
+fn default_adaptive_interval() -> u64 {
+    5
+}
+fn default_adaptive_cooldown() -> u64 {
+    30
+}
+fn default_adaptive_up_depth() -> usize {
+    2
+}
+fn default_adaptive_down_intervals() -> u32 {
+    3
+}
 fn default_queue_driver() -> String {
     "sqlite".to_string()
 }
@@ -379,6 +413,12 @@ impl Default for RuntimeProcessConfig {
             restart_max_retries: default_restart_retries(),
             restart_backoff_ms: default_backoff_ms(),
             restart_backoff_max_ms: default_backoff_max_ms(),
+            adaptive_enabled: false,
+            adaptive_interval_seconds: default_adaptive_interval(),
+            adaptive_cooldown_seconds: default_adaptive_cooldown(),
+            adaptive_scale_up_queue_depth: default_adaptive_up_depth(),
+            adaptive_scale_down_idle_intervals: default_adaptive_down_intervals(),
+            adaptive_memory_guard: true,
         }
     }
 }
@@ -535,6 +575,28 @@ impl PhpxConfig {
             {
                 return Err(PhpxError::Config(
                     "runtime.process.restart_backoff_max_ms must be >= restart_backoff_ms and <= 300000".to_string(),
+                ));
+            }
+            if p.adaptive_interval_seconds == 0 || p.adaptive_interval_seconds > 60 {
+                return Err(PhpxError::Config(
+                    "runtime.process.adaptive_interval_seconds must be 1-60".to_string(),
+                ));
+            }
+            if p.adaptive_cooldown_seconds == 0 || p.adaptive_cooldown_seconds > 300 {
+                return Err(PhpxError::Config(
+                    "runtime.process.adaptive_cooldown_seconds must be 1-300".to_string(),
+                ));
+            }
+            if p.adaptive_scale_up_queue_depth == 0 || p.adaptive_scale_up_queue_depth > 10_000 {
+                return Err(PhpxError::Config(
+                    "runtime.process.adaptive_scale_up_queue_depth must be 1-10000".to_string(),
+                ));
+            }
+            if p.adaptive_scale_down_idle_intervals == 0
+                || p.adaptive_scale_down_idle_intervals > 360
+            {
+                return Err(PhpxError::Config(
+                    "runtime.process.adaptive_scale_down_idle_intervals must be 1-360".to_string(),
                 ));
             }
             parse_size(&p.memory_limit)?;

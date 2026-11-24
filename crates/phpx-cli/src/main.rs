@@ -769,6 +769,12 @@ fn cmd_workers(config_arg: Option<PathBuf>, as_json: bool, cmd: WorkersCmd) -> i
                         "memory_soft_limit": proc.memory_soft_limit,
                         "memory_hard_limit": proc.memory_hard_limit,
                         "memory_sample_interval_seconds": proc.memory_sample_interval_seconds,
+                        "adaptive_enabled": proc.adaptive_enabled,
+                        "adaptive_interval_seconds": proc.adaptive_interval_seconds,
+                        "adaptive_cooldown_seconds": proc.adaptive_cooldown_seconds,
+                        "adaptive_scale_up_queue_depth": proc.adaptive_scale_up_queue_depth,
+                        "adaptive_scale_down_idle_intervals": proc.adaptive_scale_down_idle_intervals,
+                        "adaptive_memory_guard": proc.adaptive_memory_guard,
                         "metrics": "GET /metrics (Prometheus text: completed/failed/timeouts/rejected/recycled/restarts/circuit/active/waiting)",
                         "lifecycle": "Failed = terminal attempt with diagnostics + restart-budget; Stopped = drained pool, no new work (SPEC 5.1 + ADR-0014)",
                         "note": "M4 hardened: crash-loop circuit breaker fast-503s; drain rejects with 503 + Retry-After: 1; overload maps to HTTP 503 + Retry-After: 1"
@@ -800,6 +806,23 @@ fn cmd_workers(config_arg: Option<PathBuf>, as_json: bool, cmd: WorkersCmd) -> i
                     proc.memory_hard_limit,
                     proc.memory_sample_interval_seconds,
                 );
+                if proc.adaptive_enabled {
+                    println!(
+                        "  adaptive: ENABLED (experimental opt-in) | floor min_workers={} ceiling workers={} | interval={}s cooldown={}s up_depth={} down_idle={}x | memory_guard={} | one worker per interval, scale-down retires highest id first",
+                        proc.min_workers,
+                        proc.workers,
+                        proc.adaptive_interval_seconds,
+                        proc.adaptive_cooldown_seconds,
+                        proc.adaptive_scale_up_queue_depth,
+                        proc.adaptive_scale_down_idle_intervals,
+                        proc.adaptive_memory_guard,
+                    );
+                } else {
+                    println!(
+                        "  adaptive: disabled (fixed pool of {} workers; set [runtime.process] adaptive_enabled=true for experimental autoscale)",
+                        proc.workers,
+                    );
+                }
                 println!("  overload/circuit/draining -> HTTP 503 + Retry-After: 1 (never unbounded, SPEC 5.3)");
                 println!("  lifecycle: Failed = terminal attempt + diagnostics; Stopped = drained, no new work");
                 println!("  metrics: GET /metrics (Prometheus) or `phpx metrics` for guidance");

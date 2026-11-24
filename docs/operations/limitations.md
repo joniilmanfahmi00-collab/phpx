@@ -9,8 +9,9 @@ responsible.
 
 - Serves PHP via Process Runtime in two explicit modes (`runtime.process.execution_mode`):
   `one-shot` (fresh `php` per request) and `persistent` (fixed-size supervised
-  workers with handshake, per-worker state, restart budgets). Reported by
-  CLI/JSON and `phpx_execution_mode_info`.
+  workers with handshake, per-worker state, restart budgets; P2 adaptive
+  autoscale is experimental opt-in via `adaptive_enabled`, disabled by
+  default). Reported by CLI/JSON and `phpx_execution_mode_info`.
 - Safe static serving (traversal blocked, symlink escape -> 403, `.php` never served raw).
 - Backpressure: overload / crash-loop circuit / draining -> `503 + Retry-After: 1`,
   never an unbounded queue. Queue bounds + wait timeouts enforced and metered.
@@ -55,6 +56,12 @@ responsible.
   persist across requests (pinned by test). Use one-shot when strict isolation
   is required. Function redefinition on re-include fatals the worker (restarted,
   counted as crash).
+- P2 adaptive autoscale is experimental opt-in (`adaptive_enabled=false` default;
+  fixed pool otherwise). Safeguards: `workers` ceiling, `min_workers` floor,
+  one worker per interval, cooldown + idle hysteresis, no scale-up under
+  guardian memory pressure or open crash-loop circuit, never while draining.
+  Disabled by default until repeatable evidence shows it improves outcomes
+  without oscillation or resource pressure (plan gate).
 - Embedded runtime stays an experimental stub (`available=false`, process default).
 - No multi-tenancy isolation claim. PHP extensions + app code are trusted
   executable code (SPEC 10).
