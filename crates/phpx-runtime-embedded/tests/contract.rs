@@ -15,12 +15,16 @@ fn envelope_roundtrip_shared_contract() {
 #[test]
 fn capabilities_report_contract() {
     let off = emb::EmbeddedCapabilities::report(false);
-    assert!(!off.available);
+    assert!(!off.enabled);
     assert!(off.single_threaded);
     assert_eq!(off.max_concurrent_entries, 1);
+    // Availability always mirrors the gate assessor (never hardcoded).
+    assert_eq!(off.available, emb::gates::available());
+    #[cfg(not(phpx_embed_linked))]
+    assert!(!off.available, "stub builds are never available");
     let on = emb::EmbeddedCapabilities::report(true);
     assert!(on.enabled);
-    assert!(!on.available);
+    assert_eq!(on.available, emb::gates::available());
 }
 
 #[test]
@@ -215,8 +219,15 @@ fn promotion_gates_assess_fail_closed() {
     for g in &gates {
         assert!(!g.evidence.is_empty(), "{} needs evidence", g.id);
     }
+    // available() is exactly the AND of all gates (mechanical invariant).
+    assert_eq!(
+        emb::gates::available(),
+        gates.iter().all(|g| g.pass),
+        "available must equal the AND of all gates"
+    );
+    #[cfg(not(phpx_embed_linked))]
     assert!(
         !emb::gates::available(),
-        "promotion stays fail-closed until every gate passes"
+        "stub builds stay fail-closed (no linked engine to prove anything)"
     );
 }

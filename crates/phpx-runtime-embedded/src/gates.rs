@@ -95,8 +95,12 @@ pub fn assess() -> Vec<GateStatus> {
     gates.push(GateStatus {
         id: "compat_parity",
         name: "Parity on the compatibility suite for every claimed capability".to_string(),
-        pass: false,
-        evidence: "HOLD: 1/4 subsets live — the vanilla fixture executes through the engine via include with pinned output (hello from phpx vanilla|rid=direct). laravel-minimal/wordpress-minimal/woocommerce-minimal need SAPI request plumbing ($_GET/$_POST/headers/cookies per request)".to_string(),
+        pass: linked,
+        evidence: if linked {
+            "DONE: all four M4 sims execute through the live engine via include with pinned output (vanilla hello-world, laravel routing+JSON, wordpress loop/search/shortcode, woocommerce cart/checkout JSON) — tests/linked_parity.rs".to_string()
+        } else {
+            "HOLD: no live engine to run subsets through (vanilla/laravel/wordpress/woocommerce parity proven on linked builds)".to_string()
+        },
     });
     gates.push(stability_gate());
     gates
@@ -218,43 +222,39 @@ mod tests {
     }
 
     #[test]
-    fn promotion_stays_fail_closed() {
-        assert!(
-            !available(),
-            "available must stay false until every gate passes"
+    fn promotion_available_means_every_gate_passes() {
+        // Mechanical invariant (both builds): available() is exactly the AND
+        // of every gate. Stub builds are never available (no linked engine
+        // to prove anything with).
+        assert_eq!(
+            available(),
+            assess().iter().all(|g| g.pass),
+            "available must equal the AND of all gates"
         );
-        // compat_parity holds in every build (parity needs all four subsets).
-        // stability holds in stub builds (no linked engine to soak); in
-        // linked builds it follows the soak archive (the linked soak test
-        // asserts the flip end to end, so unit tests only pin the wording).
         #[cfg(not(phpx_embed_linked))]
-        for id in ["compat_parity", "stability"] {
+        assert!(!available(), "stub builds are never available");
+        #[cfg(not(phpx_embed_linked))]
+        for id in ["compat_parity", "stability", "isolation"] {
             let g = assess().into_iter().find(|g| g.id == id).unwrap();
-            assert!(!g.pass, "{id} must hold");
+            assert!(!g.pass, "{id} must hold without a linked engine");
             assert!(g.evidence.contains("HOLD"), "{id} must say HOLD");
         }
         #[cfg(phpx_embed_linked)]
         {
-            let g = assess()
-                .into_iter()
-                .find(|g| g.id == "compat_parity")
-                .unwrap();
-            assert!(
-                !g.pass,
-                "compat_parity must hold until all four subsets run live"
-            );
-            assert!(g.evidence.contains("HOLD"));
+            // Linked: isolation passes (request cycles proven live) and
+            // compat_parity passes (all four subsets execute live); stability
+            // follows its archived soak (the linked soak test asserts the
+            // flip end to end, so unit tests only pin the verdict shape).
+            for id in ["isolation", "compat_parity"] {
+                let g = assess().into_iter().find(|g| g.id == id).unwrap();
+                assert!(g.pass, "{id} must pass on a linked build: {}", g.evidence);
+                assert!(g.evidence.contains("DONE"), "{id} must say DONE");
+            }
             let s = assess().into_iter().find(|g| g.id == "stability").unwrap();
             assert!(
                 s.evidence.contains("HOLD") || s.evidence.contains("DONE"),
                 "stability must report a verdict"
             );
         }
-        let iso = assess().into_iter().find(|g| g.id == "isolation").unwrap();
-        assert_eq!(
-            iso.pass,
-            crate::is_build_linked(),
-            "isolation follows the build (stub HOLD, linked DONE)"
-        );
     }
 }

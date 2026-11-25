@@ -124,12 +124,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn capabilities_default_disabled() {
+    fn capabilities_report_derives_available_from_gates() {
+        // The report never hardcodes availability: it mirrors the assessor.
         let c = EmbeddedCapabilities::report(false);
-        assert!(!c.available);
+        assert_eq!(c.available, crate::gates::available());
         assert!(!c.enabled);
         assert!(c.single_threaded);
         assert_eq!(c.max_concurrent_entries, 1);
+        #[cfg(not(phpx_embed_linked))]
+        assert!(!c.available, "stub builds are never available");
     }
 
     #[test]

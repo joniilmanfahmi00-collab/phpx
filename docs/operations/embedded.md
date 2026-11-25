@@ -155,13 +155,12 @@ linked. Proves the gates hold in linked mode, not only in stub mode:
 ## Linked gate run (WSL Debian, 2026-11-24, P2 gates)
 
 - Toolchain: php-config 8.3.36 NTS + `/usr/include/php/20230831/sapi/embed/php_embed.h` + `libphp.so`; build log: `linked php-embed (php-config 8.3.36, libs=["php8.3", ...])`.
-- `PHPX_EMBED_LINK=1 cargo test -p phpx-runtime-embedded` = **42 lib + 16 contract + 8 linked-engine + 1 linked soak, all green WITH libphp linked** (was 28 + 12 on 2026-11-19).
+- `PHPX_EMBED_LINK=1 cargo test -p phpx-runtime-embedded` = **42 lib + 16 contract + 8 linked-engine + 3 linked-parity + 1 linked soak, all green WITH libphp linked** (was 28 + 12 on 2026-11-19; stub builds run 42 + 17 with linked-only tests compiled out).
 - First live executions through the narrow bridge: boot, `6*7 = 42`, echo output capture, shared-executor leak pinned, request-cycle isolation (`set → cycle → clean`), vanilla fixture parity (`hello from phpx vanilla|rid=direct`), bailout containment + engine reuse, bailout → cycle recovery — all green, default parallel test threads (single dedicated engine thread; touching the engine from different OS threads trips Zend stack tracking after a bailout).
 - Soak record (`data/bench/soak-embed-latest/SUMMARY.json`, gitignored): 300 mixed evals + 30 request cycles, 307 clean, 6 bailouts contained, 0 failures, RSS +278 KB steady-state (cap 10 MB, post-warmup) in ~1.3 s — the stability gate reads this archive back (test asserts the flip end to end).
-- Live `gates::assess()` on the linked build: **8 PASS + 1 HOLD, `available=false`** (fail-closed, correct):
-  - PASS: `abi_pin`, `native_link`, `execution_domain`, `ownership`, `containment`, `extensions` (live `php -m` 11/11 on the NTS build), `isolation` (request-cycle reset proven live), `stability` (soak archive valid: 300 iters, 0 failures, bounded RSS).
-  - HOLD: `compat_parity` (1/4 — vanilla live; laravel-minimal/wordpress-minimal/woocommerce-minimal need SAPI request plumbing: `$_GET`/`$_POST`/headers/cookies per request).
-- The last HOLD flips when the remaining three subsets execute with per-request SAPI state; `available()` derives from the assessor, so no code path changes are needed at promotion time.
+- Live `gates::assess()` on the linked build: **9 PASS, `available=true`**. The gates are honest: stub builds report HOLD + `available=false`; a linked build without a soak archive reports 8/9 + `available=false`.
+  - PASS: `abi_pin`, `native_link`, `execution_domain`, `ownership`, `containment`, `extensions` (live `php -m` 11/11 on the NTS build), `isolation` (request-cycle reset proven live), `stability` (soak archive valid), `compat_parity` (all four sims live: vanilla hello-world, laravel routing+JSON incl. contained `exit`, wordpress loop/search/shortcode, woocommerce cart/checkout incl. contained `exit`).
+- What `available=true` means: the runtime is proven capable (isolated requests, contained failures, stable under soak, app parity on the sim suite). It does NOT start serving traffic: the gateway still defaults to `process`, and `runtime.mode=embedded` is still rejected until the serve path is wired (next milestone). No code changes were needed for the flip itself — `available()` derives from the assessor.
 
 ## Live execution (P2 milestone, WSL-proven)
 
@@ -244,12 +243,12 @@ fail-closed.
 No vague deferral: each embedded subset now names its green process fixture
 AND its exact M6 blocker (compat.rs Subset.process_fixture + embedded_blocker).
 
-| Subset | Process fixture (green today) | Embedded blocker (M6 gate) |
+| Subset | Process fixture (green today) | Embedded status (M6 gate) |
 |--------|-------------------------------|----------------------------|
-| vanilla | examples/vanilla-php (m4_compat: isolation + crash-recovery green) | engine entry closed: isolated Zend request lifecycle not wired (M6 isolation gate) |
-| laravel-minimal | examples/laravel-minimal (m4_compat: routing + JSON green) | engine entry closed: framework bootstrap needs persistent opcache + env lifecycle (M6 stability gate) |
-| wordpress-minimal | examples/wordpress-minimal (m4_compat: loop + search + shortcode green) | engine entry closed: WP_SIM global-state lifecycle per request not wired (M6 isolation gate) |
-| woocommerce-minimal | examples/woocommerce-minimal (m4_compat: cart + checkout JSON green) | engine entry closed: after WP baseline; session/cart state lifecycle not wired (M6 isolation gate) |
+| vanilla | examples/vanilla-php (m4_compat: isolation + crash-recovery green) | LIVE via `live::serve` on linked builds (pinned by `linked_parity`); stub reports deferred |
+| laravel-minimal | examples/laravel-minimal (m4_compat: routing + JSON green) | LIVE via `live::serve` on linked builds (routing + JSON + urlencoded body + cookies); stub reports deferred |
+| wordpress-minimal | examples/wordpress-minimal (m4_compat: loop + search + shortcode green) | LIVE via `live::serve` on linked builds (`?p`/`?s` + cookies); stub reports deferred |
+| woocommerce-minimal | examples/woocommerce-minimal (m4_compat: cart + checkout JSON green) | LIVE via `live::serve` on linked builds (`?add_to_cart` + checkout JSON); stub reports deferred |
 
 Link-aware deferral: run_subset_stub keeps substring 'deferred' in both modes
 so contract stays stable. linked=true reports 'engine entry closed until M6

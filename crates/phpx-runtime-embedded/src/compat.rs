@@ -29,7 +29,7 @@ pub fn subsets() -> Vec<Subset> {
             entry: "index.php".to_string(),
             note: "M4 vanilla fixture shape".to_string(),
             process_fixture: "examples/vanilla-php (m4_compat: isolation + crash-recovery green)".to_string(),
-            embedded_blocker: "engine entry closed: isolated Zend request lifecycle not wired (M6 isolation gate)".to_string(),
+            embedded_blocker: "LIVE via live::serve on linked builds (M6 parity proof pinned by linked_parity); stub reports deferred".to_string(),
         },
         Subset {
             id: "laravel-minimal".to_string(),
@@ -37,7 +37,7 @@ pub fn subsets() -> Vec<Subset> {
             entry: "public/index.php".to_string(),
             note: "M4 laravel-minimal sim shape: routing plus JSON plus middleware".to_string(),
             process_fixture: "examples/laravel-minimal (m4_compat: routing + JSON green)".to_string(),
-            embedded_blocker: "engine entry closed: framework bootstrap needs persistent opcache + env lifecycle (M6 stability gate)".to_string(),
+            embedded_blocker: "LIVE via live::serve on linked builds (routing + JSON + urlencoded body + cookies); stub reports deferred (M6 compat gate)".to_string(),
         },
         Subset {
             id: "wordpress-minimal".to_string(),
@@ -45,7 +45,7 @@ pub fn subsets() -> Vec<Subset> {
             entry: "index.php".to_string(),
             note: "M4 wordpress-minimal sim shape: query plus shortcode".to_string(),
             process_fixture: "examples/wordpress-minimal (m4_compat: loop + search + shortcode green)".to_string(),
-            embedded_blocker: "engine entry closed: WP_SIM global-state lifecycle per request not wired (M6 isolation gate)".to_string(),
+            embedded_blocker: "LIVE via live::serve on linked builds (?p/?s + cookies); stub reports deferred (M6 compat gate)".to_string(),
         },
         Subset {
             id: "woocommerce-minimal".to_string(),
@@ -53,7 +53,7 @@ pub fn subsets() -> Vec<Subset> {
             entry: "index.php".to_string(),
             note: "M4 woocommerce-minimal sim shape: cart plus checkout".to_string(),
             process_fixture: "examples/woocommerce-minimal (m4_compat: cart + checkout JSON green)".to_string(),
-            embedded_blocker: "engine entry closed: after WP baseline; session/cart state lifecycle not wired (M6 isolation gate)".to_string(),
+            embedded_blocker: "LIVE via live::serve on linked builds (?add_to_cart + checkout JSON); stub reports deferred (M6 compat gate)".to_string(),
         },
     ]
 }
