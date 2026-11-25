@@ -1,102 +1,101 @@
-# PHPX M5 notes - Platform services (phase 1 queue + phase 2 scheduler + phase 3 cache/storage)
+# Catatan M5 PHPX - layanan platform (fase 1 queue + fase 2 scheduler + fase 3 cache/storage)
 
-Goal: useful application infrastructure without compromising the core server.
-Status: phase 1 + phase 2 + phase 3 DONE (queue + scheduler + cache/storage real, dispatch-only)
-+ Redis queue/cache drivers. S3-transport remains deferred to later M5.
+Tujuan: infrastruktur aplikasi yang berguna tanpa mengorbankan server inti.
+Status: fase 1 + fase 2 + fase 3 SELESAI (queue + scheduler + cache/storage nyata, dispatch-only)
++ driver Redis queue/cache. Transport S3 tetap ditunda ke M5 lanjutan.
 
-## Phase 1: queue (DONE)
+## Fase 1: queue (SELESAI)
 
-- Crate `phpx-queue`: `QueueDriver` trait (`enqueue/reserve/ack/fail/status`),
-  `MemoryQueue` (bounded, ephemeral) + `SqliteQueue` (rusqlite bundled, durable).
-- Semantics (SPEC 7.1): bounded payload 256KB, depth max 10,000, workers 1-16,
-  retries 0-25, backoff `min(2^attempts,300)s + jitter(0-4s)`, `not_before` delay,
-  visibility-timeout lease + recovery (`running -> queued` on open),
-  durable ack (sqlite row delete keeps DB bounded), dead-letter `state=dead`.
-- CLI real: `queue status` (memory 0 + ephemeral note, sqlite 0 + push hint when no db),
-  `queue push --payload ... [--max-retries] [--delay-secs]` (refused on memory, exit 2),
-  `queue work --max-jobs --visibility-timeout` (dev worker reserve+ack, `fail-job` simulates failure).
-- Validation: driver memory|sqlite, workers 1-16, sqlite requires database path.
-- Tests: `contract.rs` same suite vs both drivers (enqueue/reserve/ack, retry-delayed,
-  dead-letter, `sqlite_survives_restart`), 3 unit + 6 contract green.
-- Doc: `docs/operations/queue.md`.
+- Crate `phpx-queue`: trait `QueueDriver` (`enqueue/reserve/ack/fail/status`),
+  `MemoryQueue` (terbatas, ephemeral) + `SqliteQueue` (rusqlite bundled, tahan lama).
+- Semantik (SPEC 7.1): payload terbatas 256KB, kedalaman maks 10.000, worker 1-16,
+  retry 0-25, backoff `min(2^attempts,300)s + jitter(0-4s)`, `not_before` untuk tunda,
+  lease visibility-timeout + pemulihan (`running -> queued` saat dibuka),
+  ack tahan lama (baris sqlite dihapus agar DB tetap terbatas), dead-letter `state=dead`.
+- CLI nyata: `queue status` (memory 0 + catatan ephemeral, sqlite 0 + petunjuk push bila belum ada db),
+  `queue push --payload ... [--max-retries] [--delay-secs]` (ditolak pada memory, exit 2),
+  `queue work --max-jobs --visibility-timeout` (worker dev reserve+ack, `fail-job` mensimulasikan kegagalan).
+- Validasi: driver memory|sqlite, worker 1-16, sqlite mewajibkan path database.
+- Pengujian: `contract.rs` suite yang sama untuk kedua driver (enqueue/reserve/ack, retry-delayed,
+  dead-letter, `sqlite_survives_restart`), 3 unit + 6 kontrak hijau.
+- Dokumen: `docs/operations/queue.md`.
 
-## Phase 2: scheduler (DONE, dispatch-only per SPEC 7.2)
+## Fase 2: scheduler (SELESAI, dispatch-only per SPEC 7.2)
 
-- Crate `phpx-scheduler` (~950 lines + contract tests):
-  `CronSpec` (5-field, `*`/`?`/`*/step`/`a-b`/`a-b/step`/lists/names, OR-semantics dom/dow),
-  `Timezone` (Utc/Local/Fixed/Iana via chrono-tz, DST-safe wall-clock match),
-  `HistoryStore` (`MemoryHistory` + `SqliteHistory` table `scheduler_runs`),
+- Crate `phpx-scheduler` (~950 baris + uji kontrak):
+  `CronSpec` (5-field, `*`/`?`/`*/step`/`a-b`/`a-b/step`/lists/nama, semantik-OR dom/dow),
+  `Timezone` (Utc/Local/Fixed/Iana via chrono-tz, aman-DST wall-clock match),
+  `HistoryStore` (`MemoryHistory` + `SqliteHistory` tabel `scheduler_runs`),
   `Scheduler` (`Box<dyn QueueDriver>` + `Box<dyn HistoryStore>`, `plan_window` + `tick_window` + `tick_at`),
   `TickOutcome {dispatched, skipped_disabled, skipped_missed, duplicate}`.
-- Window: `start = end_min.saturating_sub(catchup.max(60))` (left-exclusive, current minute included).
-  Missed policy `skip` / `dispatch-now` (`catchup` alias); catchup bounded to 1 job/schedule/tick (newest first).
-  History checked **before** enqueue (overlap-safe dedup, single-node baseline).
+- Jendela: `start = end_min.saturating_sub(catchup.max(60))` (kiri-eksklusif, menit berjalan termasuk).
+  Kebijakan missed `skip` / `dispatch-now` (alias `catchup`); catchup dibatasi 1 job/jadwal/tick (terbaru dulu).
+  History dicek **sebelum** enqueue (dedup aman-tumpang-tindih, baseline satu-node).
 - Config: `SchedulerConfig{enabled, history_file, poll_interval_secs 1-3600, schedules}` +
   `ScheduleConfig{id, cron, timezone, payload, enabled, missed_policy, max_retries}`.
-  Validated via `ScheduleDef::new` + duplicate-id + max-100 check; messages flattened
-  (`invalid schedule: ...`, no double `configuration error:` prefix).
-- CLI real: `scheduler run [--dry-run] [--catchup-window-secs 0-86400]`.
-  Disabled / no schedules = exit 0 + note. memory driver without `--dry-run` = exit 2.
-  Bad cron/TZ = exit 2. `--dry-run` = plan only (no queue/history touch).
-  `--json` emits `dispatched/skipped/missed/duplicate/history`.
-- Tests: 8 unit + 10 contract green
-  (parse/match, OR-semantics, names, next_after, TZ Jakarta, dedup, skip vs bounded catchup,
-  disabled counting, duplicate-id reject).
-  CLI `m3_cli.rs` updated (scheduler run exit 0 + JSON `dispatched`).
-- Doc: `docs/operations/scheduler.md`. Example: `[[scheduler.schedules]] tick * * * * * Asia/Jakarta`.
+  Divalidasi via `ScheduleDef::new` + cek duplikat-id + batas maks-100; pesan diratakan
+  (`invalid schedule: ...`, tanpa prefiks ganda `configuration error:`).
+- CLI nyata: `scheduler run [--dry-run] [--catchup-window-secs 0-86400]`.
+  Nonaktif / tanpa jadwal = exit 0 + catatan. driver memory tanpa `--dry-run` = exit 2.
+  Cron/TZ buruk = exit 2. `--dry-run` = hanya rencana (tanpa sentuh queue/history).
+  `--json` mengeluarkan `dispatched/skipped/missed/duplicate/history`.
+- Pengujian: 8 unit + 10 kontrak hijau
+  (urai/cocok, semantik-OR, nama, next_after, TZ Jakarta, dedup, skip vs catchup terbatas,
+  penghitungan nonaktif, penolakan duplikat-id).
+  CLI `m3_cli.rs` diperbarui (scheduler run exit 0 + JSON `dispatched`).
+- Dokumen: `docs/operations/scheduler.md`. Contoh: `[[scheduler.schedules]] tick * * * * * Asia/Jakarta`.
 - Demo (sqlite queue+history): run1 `dispatched: tick due_at=... job=...`,
   run2 `dispatched 0 (duplicate=1)`, `queue status` depth=1.
   `--catchup-window-secs 3600` + skip = `missed=59`.
 
-## What changed vs M4
+## Yang berubah vs M4
 
-- `Cargo.toml` workspace: + `phpx-scheduler` member, deps `chrono 0.4` + `chrono-tz 0.10`.
-- `phpx.toml.example`: queue real + scheduler real section
-  (`history_file`, `poll_interval_secs`, commented `[[scheduler.schedules]]` example).
-- `configuration.md`: scheduler keys table + validation + CLI real notes.
-- `queue.md`: scheduler tail fixed (no longer deferred).
-- `overview.md`: subsystems queue/scheduler marked real, contracts bounded dispatch.
-- `roadmap.md`: Scheduler 4 boxes `[x]` + exit criterion dispatch-only `[x]`.
-- Smoke: `smoke-linux.sh` + `smoke-windows.ps1` expect queue/scheduler exit 0 (was stale exit 2),
+- Workspace `Cargo.toml`: + anggota `phpx-scheduler`, dep `chrono 0.4` + `chrono-tz 0.10`.
+- `phpx.toml.example`: queue nyata + bagian scheduler nyata
+  (`history_file`, `poll_interval_secs`, contoh `[[scheduler.schedules]]` yang dikomentari).
+- `configuration.md`: tabel kunci scheduler + validasi + catatan CLI nyata.
+- `queue.md`: ekor scheduler diperbaiki (tidak lagi ditunda).
+- `overview.md`: subsistem queue/scheduler ditandai nyata, kontrak dispatch terbatas.
+- `roadmap.md`: 4 kotak Scheduler `[x]` + kriteria keluar dispatch-only `[x]`.
+- Smoke: `smoke-linux.sh` + `smoke-windows.ps1` mengharapkan queue/scheduler exit 0 (dulu exit 2 basi),
   banner M3+M5.
 
-## Exit evidence (M5 phase 1+2)
+## Bukti keluar (M5 fase 1+2)
 
-- `cargo fmt --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean.
-- `cargo test -p phpx-queue -p phpx-scheduler -p phpx-config -p phpx-cli` green
-  (cli 5, config 4, scheduler unit 8, contract 10, queue contract 6).
-- `phpx queue status` exit 0 (driver note), `phpx scheduler run` exit 0 (disabled note),
-  `--json` both parse.
-- Scheduler demo duplicate-protection + catchup bound verified (see above).
+- `cargo fmt --check` bersih, `cargo clippy --workspace --all-targets -- -D warnings` bersih.
+- `cargo test -p phpx-queue -p phpx-scheduler -p phpx-config -p phpx-cli` hijau
+  (cli 5, config 4, scheduler unit 8, kontrak 10, queue kontrak 6).
+- `phpx queue status` exit 0 (catatan driver), `phpx scheduler run` exit 0 (catatan nonaktif),
+  `--json` keduanya terurai.
+- Demo scheduler perlindungan-duplikat + batas catchup terverifikasi (lihat atas).
 
-## Deferred (explicit, later M5 / M6)
+## Ditunda (eksplisit, M5 lanjutan / M6)
 
-- Cache: bounded memory + filesystem + Redis + contract tests.
-- Storage: local FS adapter + S3 prototype.
-- PHP dispatch for queue jobs (needs runtime-process integration off gateway threads).
-- Multi-node dispatch coordination (current history PK is single-node baseline).
-- Embedded runtime (M6 experimental), HTTP/2 gated.
+- Cache: memori terbatas + filesystem + Redis + uji kontrak.
+- Storage: adaptor FS lokal + prototipe S3.
+- Dispatch PHP untuk job queue (butuh integrasi runtime-process di luar thread gateway).
+- Koordinasi dispatch multi-node (PK history saat ini baseline satu-node).
+- Runtime embedded (M6 eksperimental), HTTP/2 gated.
 
-Traceability: SPEC 7.1 queue + 7.2 scheduler dispatch-only + 7.3 cache + 7.4 storage covered by M5 phase 1+2+3 + Redis follow-up;
-SPEC 15 tail covered (queue/scheduler/cache/storage); S3-transport still open.
+Ketertelusuran: SPEC 7.1 queue + 7.2 scheduler dispatch-only + 7.3 cache + 7.4 storage tercakup oleh M5 fase 1+2+3 + susulan Redis;
+ekor SPEC 15 tercakup (queue/scheduler/cache/storage); transport-S3 masih terbuka.
 
-## Phase 3: cache + storage (DONE, bounded per SPEC 7.3/7.4)
+## Fase 3: cache + storage (SELESAI, terbatas per SPEC 7.3/7.4)
 
 - Crate `phpx-cache`: `CacheDriver` (`get/set/delete/clear/stats`),
-  `MemoryCache` (HashMap + FIFO eviction, hits/misses) +
-  `FilesystemCache` (one file per key, 8-byte expiry + value, oldest-mtime eviction, survives reopen) +
-  `RedisCache` (same envelope, sorted-set eviction index, namespace isolation).
-  Bounds: key 1-256 `[A-Za-z0-9 . _ - :]`, value max 1MB, entries max 100k, bytes max 1GB.
-  TTL 0 = no expiry, max 30d. Redis shares the contract suite (namespace isolation + TTL-expiry pins).
+  `MemoryCache` (HashMap + eviksi FIFO, hit/miss) +
+  `FilesystemCache` (satu file per kunci, 8-byte expiry + value, eviksi oldest-mtime, tahan dibuka-ulang) +
+  `RedisCache` (envelope sama, indeks eviksi sorted-set, isolasi namespace).
+  Batas: kunci 1-256 `[A-Za-z0-9 . _ - :]`, value maks 1MB, entri maks 100k, byte maks 1GB.
+  TTL 0 = tanpa kedaluwarsa, maks 30 hari. Redis berbagi suite kontrak (isolasi namespace + pin TTL-expiry).
 - Crate `phpx-storage`: `StorageDriver` (`put/get/delete/list/status`),
-  `LocalStorage` (root + parents auto, traversal blocked, list max 1000 sorted, survives reopen) +
-  `S3Prototype` (endpoint+bucket+region validated real, data ops deferred with actionable note, `status` works).
-  Bounds: path 1-512, segments `[A-Za-z0-9 . _ - @]`, object max 4MB.
+  `LocalStorage` (root + parent otomatis, traversal diblokir, list maks 1000 terurut, tahan dibuka-ulang) +
+  `S3Prototype` (endpoint+bucket+region tervalidasi nyata, op data ditunda dengan catatan actionable, `status` jalan).
+  Batas: path 1-512, segmen `[A-Za-z0-9 . _ - @]`, objek maks 4MB.
 - Config: `CacheConfig{driver, max_memory, dir, max_entries}` +
-  `StorageConfig{driver, root, endpoint, bucket, region}` with validation;
-  old configs keep parsing (serde defaults). Example updated.
-- CLI real: `cache status|get|set|delete|clear`, `storage status|put|get|delete|list`
-  (exit 0 + notes, JSON `entries`/`objects`; bad key/path exit 2; s3 data ops deferred note).
-- Tests: cache 2 unit + 4 contract, storage 2 unit + 3 contract, CLI `cache_and_storage_status_real` green.
-- Docs: `operations/cache.md` + `operations/storage.md`.
-
+  `StorageConfig{driver, root, endpoint, bucket, region}` dengan validasi;
+  config lama tetap terurai (serde defaults). Contoh diperbarui.
+- CLI nyata: `cache status|get|set|delete|clear`, `storage status|put|get|delete|list`
+  (exit 0 + catatan, JSON `entries`/`objects`; kunci/path buruk exit 2; op data s3 catatan ditunda).
+- Pengujian: cache 2 unit + 4 kontrak, storage 2 unit + 3 kontrak, CLI `cache_and_storage_status_real` hijau.
+- Dokumen: `operations/cache.md` + `operations/storage.md`.

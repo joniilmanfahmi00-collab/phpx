@@ -1,35 +1,35 @@
-# PHPX backup + recovery (M7, durable queue)
+# Backup + pemulihan PHPX (M7, queue tahan-lama)
 
-## What is durable
+## Apa yang tahan-lama
 
-| Path (defaults) | Content | Backup |
+| Path (default) | Isi | Backup |
 |-----------------|---------|--------|
-| `data/queue.db` (sqlite) | durable queue jobs + dead-letter | file snapshot (stop writer or SQLite backup API) |
-| `data/scheduler.db` | scheduler cursor/history | same as queue |
-| `data/cache/` (filesystem driver) | cache entries | file copy (memory driver = ephemeral, no backup) |
-| `data/storage/` (local driver) | app objects | file copy / rsync |
-| `phpx.toml` | operator config | version control |
+| `data/queue.db` (sqlite) | job queue tahan-lama + dead-letter | snapshot file (hentikan writer atau API backup SQLite) |
+| `data/scheduler.db` | kursor/history scheduler | sama seperti queue |
+| `data/cache/` (driver filesystem) | entri cache | salinan file (driver memory = ephemeral, tanpa backup) |
+| `data/storage/` (driver local) | objek app | salinan file / rsync |
+| `phpx.toml` | config operator | version control |
 
-Memory drivers (`queue` memory, `cache` memory) are ephemeral by design: no backup, documented in `queue.md`/`cache.md`.
+Driver memory (`queue` memory, `cache` memory) bersifat ephemeral by design: tanpa backup, terdokumentasi di `queue.md`/`cache.md`.
 
-## Backup procedure (single-node baseline)
+## Prosedur backup (baseline satu-node)
 
 ```bash
-# Consistent SQLite snapshot (libsqlite backup; no live-write corruption)
+# Snapshot SQLite yang konsisten (backup libsqlite; tanpa korupsi tulis-live)
 sqlite3 data/queue.db ".backup 'backup/queue-$(date +%F).db'"
 sqlite3 data/scheduler.db ".backup 'backup/scheduler-$(date +%F).db'"
 rsync -a data/storage/ backup/storage/
 cp phpx.toml backup/phpx.toml
 ```
 
-## Recovery
+## Pemulihan
 
-1. Stop writer: `systemctl stop phpx` (or stop container).
-2. Restore files to `data/` + config, fix ownership (`chown phpx:phpx`).
-3. Start + verify: `phpx queue status`, `phpx scheduler run --dry-run` (where supported), `curl /readyz`, `phpx metrics`.
-4. RPO/RTO are operator-defined (cron frequency); v0.1 has no PITR, no encrypted-at-rest (file perms + disk encryption are operator responsibility).
+1. Hentikan writer: `systemctl stop phpx` (atau hentikan container).
+2. Restore file ke `data/` + config, perbaiki kepemilikan (`chown phpx:phpx`).
+3. Start + verifikasi: `phpx queue status`, `phpx scheduler run --dry-run` (bila didukung), `curl /readyz`, `phpx metrics`.
+4. RPO/RTO ditentukan operator (frekuensi cron); v0.1 tanpa PITR, tanpa enkripsi-at-rest (perm file + enkripsi disk adalah tanggung jawab operator).
 
-## Integrity check
+## Cek integritas
 
 ```bash
 sqlite3 data/queue.db "PRAGMA integrity_check;"

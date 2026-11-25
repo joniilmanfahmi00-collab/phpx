@@ -1,94 +1,94 @@
-# PHPX scheduler (M5 phase 2)
+# Scheduler PHPX (M5 fase 2)
 
-Status: phase 2 DONE — cron-compatible, timezone-aware, single-node dispatch-only.
-Queue phase 1 DONE (memory + sqlite + Redis). Cache/storage DONE phase 3 (see cache.md/storage.md). S3-transport deferred.
+Status: fase 2 SELESAI — cron-kompatibel, sadar-timezone, dispatch-only satu-node.
+Queue fase 1 SELESAI (memory + sqlite + Redis). Cache/storage SELESAI fase 3 (lihat cache.md/storage.md). Transport-S3 ditunda.
 
-SPEC 7.2: scheduler **dispatches** jobs by enqueueing them into the queue.
-It never executes PHP work and must not run on gateway async threads.
-Each `phpx scheduler run` is one dispatch pass; run it every minute
-(systemd timer or cron) for continuous operation.
+SPEC 7.2: scheduler **mendispatch** job dengan meng-enqueue-nya ke queue.
+Ia tidak pernah mengeksekusi kerja PHP dan tidak boleh berjalan di thread async gateway.
+Setiap `phpx scheduler run` adalah satu pass dispatch; jalankan tiap menit
+(timer systemd atau cron) untuk operasi kontinu.
 
 ## Model
 
-- `phpx-scheduler` crate: `CronSpec`, `Timezone`, `ScheduleDef`,
+- Crate `phpx-scheduler`: `CronSpec`, `Timezone`, `ScheduleDef`,
   `MemoryHistory` / `SqliteHistory`, `Scheduler::tick_window()` / `tick_at()`.
-- `Scheduler` owns `Box<dyn QueueDriver>` + `Box<dyn HistoryStore>`
-  (not generic, so CLI stays simple).
-- `tick_window(start, end, dispatch_missed)` is the single-pass entry point.
-  CLI `scheduler run` uses window = `[now - max(catchup,60s), now]`,
-  right-inclusive (current minute always included).
-- Catchup is bounded: max 1 job per schedule per tick (newest missed slot first).
-  Never backfills the whole window — keeps dispatch bounded.
-- History check happens **before** enqueue, so overlapping / retried
-  invocations stay safe (duplicate-dispatch protection, single-node baseline).
+- `Scheduler` memegang `Box<dyn QueueDriver>` + `Box<dyn HistoryStore>`
+  (bukan generik, agar CLI tetap sederhana).
+- `tick_window(start, end, dispatch_missed)` adalah titik-masuk pass-tunggal.
+  `scheduler run` CLI memakai jendela = `[now - max(catchup,60s), now]`,
+  inklusif-kanan (menit berjalan selalu termasuk).
+- Catchup dibatasi: maks 1 job per jadwal per tick (slot missed terbaru dulu).
+  Tidak pernah mengisi-ulang seluruh jendela — agar dispatch tetap terbatas.
+- Cek history terjadi **sebelum** enqueue, sehingga invokasi yang tumpang-tindih / diulang
+  tetap aman (proteksi dispatch-ganda, baseline satu-node).
 
 ## Cron (5-field `minute hour dom month dow`)
 
-- `*`, `?` (dom/dow alias for `*`), `*/step`, `a-b`, `a-b/step`, lists (`1,15,30`).
-- Month / weekday names: `JAN-DEC`, `MON-SUN` (case-insensitive, full names too).
-- `?` only allowed for dom/dow; other fields reject `?`.
-- dom/dow use standard cron OR-semantics:
-  both restricted = match when either matches;
-  one `*` = the other decides.
-- `next_after` brute-forces per-minute up to ~366 days (leap-safe).
-- Examples: `* * * * *` every minute, `*/15 9-17 * * MON-FRI` business hours,
-  `0 2 * * *` nightly 02:00.
+- `*`, `?` (alias `*` untuk dom/dow), `*/step`, `a-b`, `a-b/step`, daftar (`1,15,30`).
+- Nama bulan / hari: `JAN-DEC`, `MON-SUN` (case-insensitive, nama penuh juga).
+- `?` hanya boleh untuk dom/dow; field lain menolak `?`.
+- dom/dow memakai semantik-OR cron standar:
+  keduanya restriktif = cocok bila salah satu cocok;
+  salah satu `*` = yang lain yang menentukan.
+- `next_after` mem-brute-force per-menit sampai ~366 hari (aman-kabisat).
+- Contoh: `* * * * *` tiap menit, `*/15 9-17 * * MON-FRI` jam kerja,
+  `0 2 * * *` malam 02:00.
 
 ## Timezone
 
-- `UTC` / `Z` / `GMT` / empty = UTC.
-- `local` = host local time (matching + dispatch use local wall clock).
-- Offset: `+07:00`, `+0700`, `+07`, `+7`, with optional `UTC`/`GMT` prefix
-  (e.g. `UTC+7`, `GMT+07:00`). Fixed offset, no DST.
-- IANA: `Asia/Jakarta`, `Asia/Makassar`, `Europe/Paris`, etc. (via `chrono-tz`).
-  Matching uses wall-clock parts in that zone, so DST transitions are safe
-  (skipped hour = no match, repeated hour = matches once per wall minute).
-- Unknown zone / bad offset = config error, exit 2 with actionable message.
+- `UTC` / `Z` / `GMT` / kosong = UTC.
+- `local` = waktu lokal host (pencocokan + dispatch memakai wall clock lokal).
+- Offset: `+07:00`, `+0700`, `+07`, `+7`, dengan prefiks opsional `UTC`/`GMT`
+  (mis. `UTC+7`, `GMT+07:00`). Offset tetap, tanpa DST.
+- IANA: `Asia/Jakarta`, `Asia/Makassar`, `Europe/Paris`, dll. (via `chrono-tz`).
+  Pencocokan memakai bagian wall-clock di zona itu, sehingga transisi DST aman
+  (jam yang dilompati = tanpa cocok, jam yang diulang = cocok sekali per menit wall).
+- Zona tak dikenal / offset buruk = error config, exit 2 dengan pesan actionable.
 
-## History + duplicate protection
+## History + proteksi duplikat
 
 - Trait: `was_dispatched(schedule_id, due_at) -> bool` +
   `record_dispatch(schedule_id, due_at, dispatched_at, job_id) -> bool`.
-- `MemoryHistory`: ephemeral, dedup only within one process (preview / tests).
-- `SqliteHistory`: table `scheduler_runs (schedule_id, due_at)` PK,
-  durable across restarts. This is the production baseline.
+- `MemoryHistory`: ephemeral, dedup hanya dalam satu proses (pratinjau / pengujian).
+- `SqliteHistory`: tabel `scheduler_runs (schedule_id, due_at)` PK,
+  tahan antar restart. Ini baseline produksi.
 - Config: `[scheduler] history_file = "./data/scheduler.db"`.
-  Empty / missing = memory (ephemeral note in CLI output).
-- Duplicate run (same `schedule_id` + `due_at` minute) = counted as
-  `duplicate=1`, never double-enqueued.
+  Kosong / hilang = memory (catatan ephemeral di output CLI).
+- Run duplikat (`schedule_id` + `due_at` menit yang sama) dihitung sebagai
+  `duplicate=1`, tidak pernah di-enqueue ganda.
 
-## Missed-run policy (`missed_policy`, explicit per SPEC 7.2)
+## Kebijakan missed-run (`missed_policy`, eksplisit per SPEC 7.2)
 
-- `skip` (default when empty): only the current minute dispatches;
-  older slots in window counted as `missed`.
-- `dispatch-now` (alias `catchup` accepted): oldest→newest scan, but bounded
-  to 1 catchup job per schedule per tick (newest missed slot).
-  Rest counted as `missed`.
-- Window comes from `--catchup-window-secs 0-86400` (default 0 = current minute
-  + 60s floor). Without the flag, missed slots are only counted, never dispatched.
+- `skip` (default bila kosong): hanya menit berjalan yang didispatch;
+  slot lama dalam jendela dihitung sebagai `missed`.
+- `dispatch-now` (alias `catchup` diterima): pindai tertua→terbaru, tetapi dibatasi
+  1 job catchup per jadwal per tick (slot missed terbaru).
+  Sisanya dihitung sebagai `missed`.
+- Jendela berasal dari `--catchup-window-secs 0-86400` (default 0 = menit berjalan
+  + lantai 60s). Tanpa flag, slot missed hanya dihitung, tidak pernah didispatch.
 
 ## CLI
 
 - `phpx scheduler run [--config ...] [--json] [--dry-run] [--catchup-window-secs N]`
-  - `enabled=false` or no schedules = exit 0 + note
-    (`scheduler disabled: ...`, JSON `{"dispatched":0,...}`), never an error.
-  - `driver=memory` without `--dry-run` = exit 2 (jobs would vanish).
-    Use `driver=sqlite` for durable dispatch, or `--dry-run` to preview.
-  - `--dry-run` = `plan_window()` only: prints what *would* dispatch,
-    touches neither queue nor history.
-  - `--catchup-window-secs 3600` + `dispatch-now` = 1 catchup job max per schedule.
-  - Bad cron / timezone / payload / policy = exit 2 with flattened message
-    (`invalid schedule: ...`), never panics.
+  - `enabled=false` atau tanpa jadwal = exit 0 + catatan
+    (`scheduler disabled: ...`, JSON `{"dispatched":0,...}`), tidak pernah error.
+  - `driver=memory` tanpa `--dry-run` = exit 2 (job akan lenyap).
+    Pakai `driver=sqlite` untuk dispatch tahan-lama, atau `--dry-run` untuk pratinjau.
+  - `--dry-run` = hanya `plan_window()`: mencetak apa yang *akan* didispatch,
+    tanpa menyentuh queue maupun history.
+  - `--catchup-window-secs 3600` + `dispatch-now` = maks 1 job catchup per jadwal.
+  - Cron / timezone / payload / policy buruk = exit 2 dengan pesan rata
+    (`invalid schedule: ...`), tidak pernah panic.
 - JSON: `{"dispatched":N,"skipped":N,"missed":N,"duplicate":N,"history":"..."}`
-  (field names match `TickOutcome`).
+  (nama field cocok dengan `TickOutcome`).
 
 ## Config
 
 ```toml
 [scheduler]
 enabled = true
-history_file = "./data/scheduler.db"  # empty = memory (ephemeral)
-poll_interval_secs = 30               # 1-3600, informational for timer operators
+history_file = "./data/scheduler.db"  # kosong = memory (ephemeral)
+poll_interval_secs = 30               # 1-3600, informasional untuk operator timer
 
 [[scheduler.schedules]]
 id = "tick"
@@ -96,20 +96,20 @@ cron = "* * * * *"
 timezone = "Asia/Jakarta"
 payload = "{\"job\":\"tick\"}"
 enabled = true
-missed_policy = "skip"   # skip | dispatch-now (catchup alias accepted)
-max_retries = 3          # 0-25, passed to queue enqueue
+missed_policy = "skip"   # skip | dispatch-now (alias catchup diterima)
+max_retries = 3          # 0-25, diteruskan ke enqueue queue
 ```
 
-Validation (`phpx-config`, full semantic via `ScheduleDef::new`):
+Validasi (`phpx-config`, semantik penuh via `ScheduleDef::new`):
 
-- `poll_interval_secs` 1-3600, max 100 schedules, ids unique + non-empty.
-- cron 5 fields, ranges checked, `?` only dom/dow.
-- timezone: UTC / local / offset / IANA, else exit 2.
-- payload non-empty, max 256KB.
-- `missed_policy` empty = `skip`; else `skip` / `dispatch-now` / `catchup`.
+- `poll_interval_secs` 1-3600, maks 100 jadwal, id unik + non-kosong.
+- cron 5 field, range dicek, `?` hanya dom/dow.
+- timezone: UTC / local / offset / IANA, jika tidak exit 2.
+- payload non-kosong, maks 256KB.
+- `missed_policy` kosong = `skip`; selain itu `skip` / `dispatch-now` / `catchup`.
 - `max_retries` 0-25.
 
-## systemd timer (recommended, every minute)
+## Timer systemd (disarankan, tiap menit)
 
 ```ini
 # /etc/systemd/system/phpx-scheduler.service
@@ -124,23 +124,23 @@ Persistent=true
 WantedBy=timers.target
 ```
 
-Single-node only. For multi-node, elect one dispatcher or share one
-sqlite history file — two writers will double-dispatch (documented limit).
+Satu-node saja. Untuk multi-node, pilih satu dispatcher atau pakai satu
+file history sqlite bersama — dua writer akan mendispatch ganda (batas terdokumentasi).
 
-## Tests
+## Pengujian
 
-- `crates/phpx-scheduler/tests/contract.rs` (10 tests):
-  cron parse/match, OR-semantics, names, next_after, TZ Jakarta, history dedup,
-  skip vs dispatch-now bounded catchup, disabled counting, duplicate-id reject.
-- `cargo test -p phpx-scheduler` green (8 unit + 10 contract).
-- CLI: `scheduler run` exit 0 (disabled note), `--json` has `dispatched`,
-  `--catchup-window-secs 3600` + skip = `missed=59`, bad cron = exit 2.
-- Demo: sqlite queue + history, `* * * * * Asia/Jakarta`:
+- `crates/phpx-scheduler/tests/contract.rs` (10 pengujian):
+  urai/cocok cron, semantik-OR, nama, next_after, TZ Jakarta, dedup history,
+  skip vs dispatch-now catchup terbatas, penghitungan nonaktif, penolakan duplikat-id.
+- `cargo test -p phpx-scheduler` hijau (8 unit + 10 kontrak).
+- CLI: `scheduler run` exit 0 (catatan nonaktif), `--json` punya `dispatched`,
+  `--catchup-window-secs 3600` + skip = `missed=59`, cron buruk = exit 2.
+- Demo: queue sqlite + history, `* * * * * Asia/Jakarta`:
   run1 `dispatched: tick`, run2 `dispatched 0 (duplicate=1)`, `queue status` depth=1.
 
-## Deferred (later M5)
+## Ditunda (M5 lanjutan)
 
-- Cache: DONE phase 3 (bounded memory + filesystem + Redis + contract tests) — see `cache.md`.
-- Storage: DONE phase 3 (local FS real + S3 prototype) — see `storage.md`.
-- PHP dispatch for queue jobs (needs runtime-process integration off gateway threads).
-- Multi-node dispatch coordination (current dedup is single-node baseline).
+- Cache: SELESAI fase 3 (memori terbatas + filesystem + Redis + uji kontrak) — lihat `cache.md`.
+- Storage: SELESAI fase 3 (FS lokal nyata + prototipe S3) — lihat `storage.md`.
+- Dispatch PHP untuk job queue (butuh integrasi runtime-process di luar thread gateway).
+- Koordinasi dispatch multi-node (dedup saat ini baseline satu-node).

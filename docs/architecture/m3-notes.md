@@ -1,40 +1,40 @@
-# PHPX M3 notes - Developer preview v0.1
+# Catatan M3 PHPX - pratinjau developer v0.1
 
-Goal: useful minimal PHP application server. Status: DONE (developer preview, not production SLA).
+Tujuan: server aplikasi PHP minimal yang berguna. Status: SELESAI (pratinjau developer, bukan SLA produksi).
 
-## What changed vs M2
+## Yang berubah vs M2
 
-- CLI finalized to SPEC 9 surface:
+- CLI difinalkan ke permukaan SPEC 9:
   `serve [--host --port]`, `doctor`, `version`, `runtime list|inspect`, `workers status|reload`,
-  `queue status|work` (deferred M5 stub, exit 2), `scheduler run` (deferred M5 stub, exit 2), `metrics` (dev-preview note).
-  Global `--config` resolution: `--config` > `./phpx.toml` > `phpx.toml.example`. Global `--json` where supported.
-  Exit codes: 0 ok, 1 runtime, 2 config/usage/deferred. See docs/operations/configuration.md.
-- Gateway: added `GET /healthz` (liveness, always 200 when running) + `GET /readyz` (readiness, docroot + entrypoint check).
-  No PHP dispatch, no body read for health paths. Covers SPEC 11 basic health checks for M3.
-- Config: `phpx.toml.example` rewritten with documented defaults + Docker/systemd guidance. `PhpxConfig` derives `Serialize` for JSON status outputs.
-- Packaging: `Dockerfile` (multi-stage rust:1.99.1-bookworm -> php:8.4-cli-bookworm, non-root `phpx` uid 10001, `HEALTHCHECK /healthz`, default `/app/phpx.toml` serving vanilla fixture).
-  `.dockerignore`, `packaging/systemd/phpx.service` (User=phpx, SIGINT graceful drain, hardening flags).
-- Docs: `operations/configuration.md`, `quickstart-linux.md`, `quickstart-docker.md`, `php-version-matrix.md`, `limitations.md`, `systemd.md`.
-  README labeled developer preview. Roadmap M3 boxes checked.
-- Tests: M2 suites still green. New `tests/m3_cli.rs` (CLI contract: version/doctor/runtime/workers/queue/scheduler/metrics exit codes + JSON) and health coverage in `tests/m3_gateway.rs` (`/healthz` + `/readyz` 200 + x-request-id).
-  Scripts: `scripts/smoke-linux.sh`, `scripts/smoke-docker.sh`, `scripts/bench.sh` (reproducible baseline, wrk/curl fallback, NOT a performance claim).
+  `queue status|work` (stub ditunda M5, exit 2), `scheduler run` (stub ditunda M5, exit 2), `metrics` (catatan dev-preview).
+  Resolusi `--config` global: `--config` > `./phpx.toml` > `phpx.toml.example`. `--json` global bila didukung.
+  Kode exit: 0 ok, 1 runtime, 2 config/penggunaan/deferred. Lihat docs/operations/configuration.md.
+- Gateway: ditambah `GET /healthz` (liveness, selalu 200 saat berjalan) + `GET /readyz` (readiness, cek docroot + entrypoint).
+  Tanpa dispatch PHP, tanpa baca body untuk path health. Mencakup health check dasar SPEC 11 untuk M3.
+- Config: `phpx.toml.example` ditulis ulang dengan default terdokumentasi + panduan Docker/systemd. `PhpxConfig` menurunkan `Serialize` untuk output status JSON.
+- Pengemasan: `Dockerfile` (multi-stage rust:1.99.1-bookworm -> php:8.4-cli-bookworm, non-root `phpx` uid 10001, `HEALTHCHECK /healthz`, default `/app/phpx.toml` menyajikan fixture vanilla).
+  `.dockerignore`, `packaging/systemd/phpx.service` (User=phpx, drain SIGINT graceful, flag hardening).
+- Dokumen: `operations/configuration.md`, `quickstart-linux.md`, `quickstart-docker.md`, `php-version-matrix.md`, `limitations.md`, `systemd.md`.
+  README dilabeli pratinjau developer. Kotak roadmap M3 dicentang.
+- Pengujian: suite M2 tetap hijau. `tests/m3_cli.rs` baru (kontrak CLI: kode exit version/doctor/runtime/workers/queue/scheduler/metrics + JSON) dan cakupan health di `tests/m3_gateway.rs` (`/healthz` + `/readyz` 200 + x-request-id).
+  Skrip: `scripts/smoke-linux.sh`, `scripts/smoke-docker.sh`, `scripts/bench.sh` (baseline reprodusibel, fallback wrk/curl, BUKAN klaim performa).
 
-## Exit evidence
+## Bukti keluar
 
-- `cargo fmt --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean.
-- `cargo test --workspace` green (M1 5+2, M2 3+2, M3 CLI + gateway health).
-- `phpx doctor` M3 prints config check + next-step hint.
-- Docker quickstart: `docker build -t phpx:0.1.0-dev .` + `docker run -p 8080:8080` + `/healthz` + `/` + static pass; `whoami` -> `phpx`.
-- Native Linux quickstart: `cargo build -p phpx-cli`, `phpx doctor`, `phpx serve --config phpx.toml`, `/healthz` + `/readyz` + `/` + static + traversal 400 pass.
-- Vanilla fixture passes (front-controller + static + no source leak, same as M2).
-- Limitations documented; v0.1 labeled developer preview everywhere (CLI help, serve banner, README, limitations).
+- `cargo fmt --check` bersih, `cargo clippy --workspace --all-targets -- -D warnings` bersih.
+- `cargo test --workspace` hijau (M1 5+2, M2 3+2, M3 CLI + gateway health).
+- `phpx doctor` M3 mencetak cek config + petunjuk langkah berikutnya.
+- Quickstart Docker: `docker build -t phpx:0.1.0-dev .` + `docker run -p 8080:8080` + `/healthz` + `/` + statis lolos; `whoami` -> `phpx`.
+- Quickstart Linux native: `cargo build -p phpx-cli`, `phpx doctor`, `phpx serve --config phpx.toml`, `/healthz` + `/readyz` + `/` + statis + traversal 400 lolos.
+- Fixture vanilla lolos (front-controller + statis + tanpa bocor source, sama seperti M2).
+- Limitasi didokumentasikan; v0.1 dilabeli pratinjau developer di mana-mana (bantuan CLI, banner serve, README, limitations).
 
-## Deferred (explicit, must not block M3)
+## Ditunda (eksplisit, tidak boleh memblokir M3)
 
-- Queue/scheduler/cache/storage backends -> M5. CLI stubs exit 2 with deferred note.
-- Prometheus metrics, live per-worker counters, SIGHUP reload, soak tests -> M4.
-- Embedded runtime -> M6 experimental.
-- HTTP/2 -> gated, not claimed. HTTP/3, CDN, WAF, reverse-proxy parity -> deferred per SPEC 6.2.
-- Framework fixtures (Composer/Laravel/WordPress) -> M4.
+- Backend queue/scheduler/cache/storage -> M5. Stub CLI exit 2 dengan catatan ditunda.
+- Metrik Prometheus, counter live per-worker, reload SIGHUP, uji soak -> M4.
+- Runtime embedded -> M6 eksperimental.
+- HTTP/2 -> gated, tidak diklaim. HTTP/3, CDN, WAF, paritas reverse-proxy -> ditunda per SPEC 6.2.
+- Fixture framework (Composer/Laravel/WordPress) -> M4.
 
-Traceability: SPEC 15 items 1-4, 8-10 covered by M1-M3; items 5-7 + 11-12 complete in M4.
+Ketertelusuran: SPEC 15 butir 1-4, 8-10 tercakup oleh M1-M3; butir 5-7 + 11-12 selesai di M4.

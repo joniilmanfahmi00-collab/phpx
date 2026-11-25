@@ -1,29 +1,29 @@
-# PHPX upgrade + rollback (M7)
+# Upgrade + rollback PHPX (M7)
 
-## Versioning
+## Versi
 
-- SemVer, config `schema_version = 1`. Minor/patch keep v1 parsing (new fields have serde defaults).
-- `phpx doctor` warns on PHP target mismatch; `phpx workers status` shows active pool bounds.
+- SemVer, config `schema_version = 1`. Minor/patch mempertahankan parsing v1 (field baru punya serde defaults).
+- `phpx doctor` memperingatkan bila target PHP mismatch; `phpx workers status` menampilkan batas pool aktif.
 
-## Upgrade (stateless gateway, 1-2 min)
+## Upgrade (gateway stateless, 1-2 mnt)
 
-1. Snapshot durable state (see backup-recovery.md): `data/queue.db`, `data/scheduler.db`, `data/cache/`, `data/storage/`, `phpx.toml`.
-2. Pull new image/binary, validate: `phpx doctor`, `phpx workers status`, `curl /readyz`.
+1. Snapshot state tahan-lama (lihat backup-recovery.md): `data/queue.db`, `data/scheduler.db`, `data/cache/`, `data/storage/`, `phpx.toml`.
+2. Tarik image/binary baru, validasi: `phpx doctor`, `phpx workers status`, `curl /readyz`.
 3. Drain + restart:
    ```bash
-   systemctl stop phpx        # graceful drain bounded by shutdown_drain_timeout_seconds
-   # replace /usr/local/bin/phpx or image tag
+   systemctl stop phpx        # graceful drain dibatasi oleh shutdown_drain_timeout_seconds
+   # ganti /usr/local/bin/phpx atau tag image
    systemctl start phpx && curl -fsS http://127.0.0.1:8080/readyz
    ```
    Docker: `docker stop --time=30 phpx && docker run ... new-tag`.
-4. Watch `/metrics` 5 min: `restarts` flat, `rejected_overload` ~0, p95 stable vs bench baseline.
+4. Pantau `/metrics` 5 mnt: `restarts` datar, `rejected_overload` ~0, p95 stabil vs baseline bench.
 
 ## Rollback
 
-- Same binary/image previous tag + previous `phpx.toml` (kept in step 1). No DB migration in v0.1 (SQLite schema additive only), so rollback = restart old version.
-- If queue DB was written by newer version, old binary still reads it (additive schema); if unsure, restore `queue.db` snapshot then restart.
+- Binary/image tag sebelumnya yang sama + `phpx.toml` sebelumnya (disimpan di langkah 1). Tanpa migrasi DB di v0.1 (skema SQLite hanya aditif), jadi rollback = restart versi lama.
+- Bila DB queue sudah ditulis oleh versi lebih baru, binary lama tetap bisa membacanya (skema aditif); bila ragu, restore snapshot `queue.db` lalu restart.
 
-## systemd resource example
+## Contoh resource systemd
 
 ```ini
 [Service]
@@ -31,4 +31,4 @@ MemoryMax=1G
 CPUQuota=200%
 TasksMax=256
 ```
-Tune per `bench.sh` baseline; saturation must 503 (observable), never OOM-loop.
+Tune per baseline `bench.sh`; saturasi wajib 503 (teramati), tidak boleh OOM-loop.

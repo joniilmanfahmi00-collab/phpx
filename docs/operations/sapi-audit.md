@@ -1,88 +1,87 @@
-# PHP SAPI compatibility audit (M4 + P0-D)
+# Audit kompatibilitas SAPI PHP (M4 + P0-D)
 
-## What the gateway actually does
+## Yang benar-benar dilakukan gateway
 
-- Spawns `php -d auto_prepend_file=<phpx-bootstrap> <entrypoint>` per request
-  (one-shot, cwd = app root). No FPM, no CGI, no Apache module.
-- Bridges via environment: `PHPX_REQUEST_ID`, `PHPX_METHOD`, `PHPX_PATH`,
-  `PHPX_QUERY`, `PHPX_HEADERS_JSON`, `PHPX_PROTOCOL`. Body is piped on stdin.
-- `src/bootstrap.php` (embedded, materialized to temp) emulates CGI-like state:
-  `$_GET` (from `PHPX_QUERY`), `$_COOKIE` (from `Cookie` header),
-  `$_POST` for `application/x-www-form-urlencoded` bodies (parsed from stdin),
+- Men-spawn `php -d auto_prepend_file=<phpx-bootstrap> <entrypoint>` per request
+  (one-shot, cwd = app root). Tanpa FPM, tanpa CGI, tanpa modul Apache.
+- Menjembatani via environment: `PHPX_REQUEST_ID`, `PHPX_METHOD`, `PHPX_PATH`,
+  `PHPX_QUERY`, `PHPX_HEADERS_JSON`, `PHPX_PROTOCOL`. Body dipipa lewat stdin.
+- `src/bootstrap.php` (embedded, dimaterialisasi ke temp) mengemulasi state
+  ala-CGI: `$_GET` (dari `PHPX_QUERY`), `$_COOKIE` (dari header `Cookie`),
+  `$_POST` untuk body `application/x-www-form-urlencoded` (diparsing dari stdin),
   `$_SERVER["REQUEST_METHOD"/"REQUEST_URI"/"QUERY_STRING"/"HTTP_*"/"CONTENT_*"/"PHP_AUTH_*"/"REMOTE_ADDR"]`,
-  `HTTP_AUTHORIZATION` passthrough, `getallheaders()` polyfill, and
-  `phpx_input()` body helper.
-- PHP-level heap limit: `-d memory_limit=<limit>` from `runtime.process.memory_limit`
-  (P0-C, real enforcement; heap only, not OS RSS).
-- Stdout/stderr are drained concurrently (P0-D fix): responses larger than the
-  OS pipe buffer (~64KB, e.g. Laravel welcome ~80KB) no longer deadlock.
+  passthrough `HTTP_AUTHORIZATION`, polyfill `getallheaders()`, dan helper
+  body `phpx_input()`.
+- Batas heap level-PHP: `-d memory_limit=<limit>` dari `runtime.process.memory_limit`
+  (P0-C, enforcement nyata; hanya heap, bukan OS RSS).
+- Stdout/stderr dikuras konkuren (fix P0-D): respons lebih besar dari buffer
+  pipe OS (~64KB, mis. welcome Laravel ~80KB) tidak lagi deadlock.
 
-## Supported
+## Didukung
 
-- SAPI `cli` only. Verified: `php -r "echo php_sapi_name();"` -> `cli`.
-  `phpx doctor` reports `php-sapi` OK only for `cli`.
-- Superglobals above + `$_REQUEST` merge + `php://stdin` body.
-  Proven by `m4_compat`: `?name=ara`, cookies, `User-Agent`, POST bodies.
+- Hanya SAPI `cli`. Terverifikasi: `php -r "echo php_sapi_name();"` -> `cli`.
+  `phpx doctor` melaporkan `php-sapi` OK hanya untuk `cli`.
+- Superglobal di atas + merge `$_REQUEST` + body `php://stdin`.
+  Terbukti oleh `m4_compat`: `?name=ara`, cookie, `User-Agent`, body POST.
 
-## Unsupported (explicit, not bugs)
+## Tidak didukung (eksplisit, bukan bug)
 
-- `php-fpm` / `php-cgi` / `mod_php`: never spawned; apps must not assume FPM
-  status pages, `fastcgi_*` functions, or `.user.ini` FPM semantics.
-- `php://input`: empty under CLI. Workaround (documented, used by fixtures):
+- `php-fpm` / `php-cgi` / `mod_php`: tidak pernah di-spawn; app tidak boleh
+  mengasumsikan halaman status FPM, fungsi `fastcgi_*`, atau semantik `.user.ini` FPM.
+- `php://input`: kosong di CLI. Workaround (terdokumentasi, dipakai fixture):
   `function_exists("phpx_input") ? phpx_input() : file_get_contents("php://input")`.
-- Multipart/form-data is parsed in PHP (RC track): `$_POST` (incl. `a[]`,
-  `a[b]` shapes) and `$_FILES` (plain, `f[]`, `a[b]` shapes) are populated
-  from the raw body in both one-shot (`bootstrap.php`) and persistent
-  (`worker-persistent.php`) workers; temp files via `tempnam()` tracked in
-  `$GLOBALS["PHPX_TMP_FILES"]` and unlinked after the request (shutdown
-  function one-shot, next-request cleanup persistent). Caps: boundary <= 200
-  chars, <= 200 parts, boundary match requires a valid `--`/`CRLF` trailer so
-  lookalike bytes inside file content do not split. Raw bytes stay available
-  via `phpx_input()`.
-- `move_uploaded_file()` / `is_uploaded_file()`: always false under CLI SAPI
-  (PHP only trusts real SAPI uploads). Read bytes via
-  `file_get_contents($_FILES[...]["tmp_name"])` or `rename()` the temp file.
-  Real apps that call `move_uploaded_file()` (e.g. WP `wp_handle_upload`)
-  need an app-side bypass; fixture `examples/vanilla-php/public/upload.php`
-  pins the supported contract.
-- Apps that terminate the process (`exit`/`die`, e.g. WordPress `wp_redirect`
-  and REST serving paths) kill a persistent worker: the supervisor maps it to
-  500 + restart with a new incarnation and resyncs the stream
-  (pinned by `p1a: app_exit_kills_worker_and_pool_resyncs`). One-shot captures
-  the flushed output as the response body instead. Prefer one-shot for apps
-  that exit per request.
-  This blocks REST/file-upload request *bodies* sent as raw octets
-  (e.g. WP media `rest_upload_no_data` for `Content-Type: image/png`).
-  Multipart uploads populate `$_FILES` (see above); only the raw
-  `php://input` path stays empty.
-- `$_FILES` under CLI SAPI: populated by the PHPX parser (see above), not by
-  PHP itself. Routing still works as before (Laravel multipart POST ->
-  graceful 405); `move_uploaded_file()` stays false — read `tmp_name` or
-  `rename()` it.
-- `$_SESSION` persistence: not emulated (no session file/cookie round-trip
-  through the gateway). Apps that store sessions server-side (Laravel database
-  driver) still persist rows and can be asserted DB-side; the session *cookie*
-  itself is swallowed with all other `Set-Cookie` output.
-- `$_SERVER["REMOTE_ADDR"]` defaults to `127.0.0.1`; `["SERVER_NAME"]`/`["SERVER_PORT"]`
-  derive from the `Host` header (IPv6-aware); `HTTP_AUTHORIZATION` is passed
-  through and `Authorization: Basic` maps to `PHP_AUTH_USER`/`PHP_AUTH_PW`
-  (CGI parity; Bearer/other schemes untouched). The true client IP is not
-  forwarded — document before trusting any of these for auth/rate-limit decisions.
-- Long-lived resources (DB pools, OPcache) do not persist across requests
-  (one-shot). This is the isolation tradeoff: safe by default, bootstrap cost
-  per request.
-- PHP-set response status/headers are NOT propagated under CLI (P0-D finding):
-  `header()` and `http_response_code()` are no-ops in `cli` SAPI, so the
-  gateway returns 200 with the framework's rendered body. Examples: Laravel's
-  404 page arrives as HTTP 200 containing "Not Found"
-  (pinned by `p0d_laravel::laravel_unknown_route_reports_not_found_body`);
-  with WP pretty permalinks, `?p=N` shortlink answers become empty-200 bodies
-  because `redirect_canonical()` emits `Location` + `exit` and the header is
-  dropped. Crash (non-zero exit) -> 500, timeout -> 504 are gateway-mapped
-  and unaffected.
+- Multipart/form-data diparsing di PHP (jalur RC): `$_POST` (termasuk bentuk `a[]`,
+  `a[b]`) dan `$_FILES` (polos, `f[]`, bentuk `a[b]`) diisi dari body mentah
+  baik di worker one-shot (`bootstrap.php`) maupun persistent
+  (`worker-persistent.php`); file tmp via `tempnam()` dilacak di
+  `$GLOBALS["PHPX_TMP_FILES"]` dan di-unlink setelah request (fungsi shutdown
+  untuk one-shot, cleanup next-request untuk persistent). Cap: boundary <= 200
+  karakter, <= 200 part, kecocokan boundary mensyaratkan trailer `--`/`CRLF`
+  valid agar byte mirip di dalam konten file tidak membelah. Byte mentah tetap
+  tersedia via `phpx_input()`.
+- `move_uploaded_file()` / `is_uploaded_file()`: selalu false di CLI SAPI
+  (PHP hanya memercayai upload SAPI asli). Baca byte via
+  `file_get_contents($_FILES[...]["tmp_name"])` atau `rename()` file tmp.
+  App asli yang memanggil `move_uploaded_file()` (mis. `wp_handle_upload` WP)
+  butuh bypass sisi-app; fixture `examples/vanilla-php/public/upload.php`
+  mem-pin kontrak yang didukung.
+- App yang menghentikan proses (`exit`/`die`, mis. `wp_redirect` WordPress dan
+  jalur serving REST) membunuh worker persistent: supervisor memetakannya ke
+  500 + restart dengan inkarnasi baru dan me-resync stream
+  (dipin oleh `p1a: app_exit_kills_worker_and_pool_resyncs`). One-shot menangkap
+  output yang ter-flush sebagai body respons. Pilih one-shot untuk app yang
+  exit per request.
+  Ini memblokir body request REST/file-upload yang dikirim sebagai oktet mentah
+  (mis. `rest_upload_no_data` media WP untuk `Content-Type: image/png`).
+  Upload multipart mengisi `$_FILES` (lihat atas); hanya jalur `php://input`
+  mentah yang tetap kosong.
+- `$_FILES` di CLI SAPI: diisi oleh parser PHPX (lihat atas), bukan oleh PHP
+  sendiri. Routing tetap bekerja seperti sebelumnya (multipart POST Laravel ->
+  405 graceful); `move_uploaded_file()` tetap false — baca `tmp_name` atau
+  `rename()`.
+- Persistensi `$_SESSION`: tidak diemulasi (tanpa round-trip file session/cookie
+  lewat gateway). App yang menyimpan session sisi-server (driver database
+  Laravel) tetap menulis baris dan dapat diasert sisi-DB; *cookie* session
+  sendiri ditelan bersama semua output `Set-Cookie` lain.
+- `$_SERVER["REMOTE_ADDR"]` default `127.0.0.1`; `["SERVER_NAME"]`/`["SERVER_PORT"]`
+  diturunkan dari header `Host` (sadar IPv6); `HTTP_AUTHORIZATION` diteruskan
+  dan `Authorization: Basic` dipetakan ke `PHP_AUTH_USER`/`PHP_AUTH_PW`
+  (paritas CGI; skema Bearer/lain tak tersentuh). IP klien sejati tidak
+  diteruskan — dokumentasikan sebelum memercayai salah satunya untuk keputusan auth/rate-limit.
+- Resource berumur-panjang (pool DB, OPcache) tidak bertahan lintas request
+  (one-shot). Ini tradeoff isolasi: aman default, ongkos bootstrap per request.
+- Status/header respons set-PHP TIDAK dipropagasi di CLI (temuan P0-D):
+  `header()` dan `http_response_code()` adalah no-op di SAPI `cli`, jadi
+  gateway mengembalikan 200 dengan body renderan framework. Contoh: halaman
+  404 Laravel tiba sebagai HTTP 200 berisi "Not Found"
+  (dipin oleh `p0d_laravel::laravel_unknown_route_reports_not_found_body`);
+  dengan pretty permalink WP, jawaban shortlink `?p=N` menjadi body 200 kosong
+  karena `redirect_canonical()` mengemis `Location` + `exit` dan header-nya
+  dibuang. Crash (exit non-nol) -> 500, timeout -> 504 dipetakan gateway dan
+  tidak terpengaruh.
 
-## How to audit a new host
+## Cara mengaudit host baru
 
-1. `phpx doctor` (checks `php`, `php-sapi`, 11 extensions, config, OS).
-2. `php -m` vs app requirement list; record gaps in `compatibility-matrix.md`.
-3. `cargo test -p phpx-server --test m4_compat` against the fixture set.
+1. `phpx doctor` (cek `php`, `php-sapi`, 11 ekstensi, config, OS).
+2. `php -m` vs daftar kebutuhan app; catat gap di `compatibility-matrix.md`.
+3. `cargo test -p phpx-server --test m4_compat` terhadap set fixture.

@@ -1,15 +1,16 @@
-## ADR-0009: Queue durability and storage adapters
+## ADR-0009: Durabilitas antrean dan adapter penyimpanan
 
--   **Status:** Accepted
--   **Decision:** Queue and storage are pluggable interfaces. SQLite is
-    the initial durable single-node queue backend; Redis is an optional
-    adapter. In-memory queue is development-only.
--   **Context:** A platform queue must not lose acknowledged jobs on
-    process restart.
--   **Consequences:**
-    -   Job state transitions, retries, leases/visibility timeouts, and
-        dead-letter handling require transactional semantics.
-    -   The in-memory driver is explicitly marked non-durable.
-    -   PostgreSQL and other distributed backends are deferred.
-    -   Filesystem and S3-compatible storage adapters are introduced
-        incrementally.
+-   **Status:** Diterima (Accepted)
+-   **Keputusan:** Antrean dan penyimpanan adalah antarmuka yang dapat
+    dipasang-lepas (pluggable). SQLite adalah backend antrean durable
+    awal untuk single-node; Redis adalah adapter opsional. Antrean
+    in-memory hanya untuk pengembangan.
+-   **Konteks:** Antrean platform tidak boleh kehilangan job yang sudah
+    di-acknowledge saat proses di-restart.
+-   **Konsekuensi:**
+    -   Transisi status job, retry, lease/visibility timeout, dan
+        penanganan dead-letter membutuhkan semantik transaksional.
+    -   Driver in-memory ditandai secara eksplisit sebagai non-durable.
+    -   PostgreSQL dan backend terdistribusi lainnya ditunda.
+    -   Adapter penyimpanan filesystem dan yang kompatibel dengan S3
+        diperkenalkan secara bertahap.

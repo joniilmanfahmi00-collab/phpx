@@ -1,32 +1,32 @@
-# M7 production candidate notes (pase 1 DONE)
+# Catatan kandidat produksi M7 PHPX (fase 1 SELESAI)
 
-## Goal
+## Tujuan
 
-RC gate: no critical sec issue, saturation bounded + observable, recovery documented + tested, claims reproducible.
+Gerbang RC: tanpa isu sec kritis, saturasi terbatas + teramati, pemulihan terdokumentasi + teruji, klaim reprodusibel.
 
-## Pase 1 DONE (this change)
+## Fase 1 SELESAI (perubahan ini)
 
-- Threat model + boundaries published (`docs/operations/security.md`).
-- Secret redaction helpers + unit tests (`is_sensitive_header`, `redacted_header_value`, `extract_traceparent`).
-- Boundary integration tests (`m7_security`: raw-socket encoded-traversal 400, sensitive-header soak, symlink escape 403/404, Dockerfile non-root static check).
-- Observability docs (`metrics.md`: /healthz /readyz /metrics series + alerts; OTel-ready note, no exporter in v0.1).
-- Ops docs (`upgrade-rollback.md`, `backup-recovery.md`).
+- Model ancaman + batas dipublikasikan (`docs/operations/security.md`).
+- Helper redaksi secret + uji unit (`is_sensitive_header`, `redacted_header_value`, `extract_traceparent`).
+- Uji integrasi batas (`m7_security`: traversal encode mentah via raw-socket 400, sensitive-header soak, symlink escape 403/404, cek statis Dockerfile non-root).
+- Dokumen observabilitas (`metrics.md`: deret /healthz /readyz /metrics + siaga; catatan OTel-ready, tanpa exporter di v0.1).
+- Dokumen ops (`upgrade-rollback.md`, `backup-recovery.md`).
 
-Evidence: `cargo test -p phpx-server --lib` (5 ok incl 3 m7), `cargo test -p phpx-server --test m7_security` (4 ok).
+Bukti: `cargo test -p phpx-server --lib` (5 ok termasuk 3 m7), `cargo test -p phpx-server --test m7_security` (4 ok).
 
-## Sisa (pase 2)
+## Sisa (fase 2)
 
-- cgroup limit test (adversarial saturation -> 503 bounded, no unbounded queue).
-- Soak/bench reproducible report hook (`bench.sh` baseline + `/metrics` snapshot archival).
-- Docker hardening + SBOM script (`scripts/sbom.sh` + windows ps1, syft-or-cargo-tree fallback).
-- Native package automation (`packaging/` deb/rpm/tar + release checklist).
-- Roadmap M7 checkboxes + limitations RC wording + compatibility/deployment matrices publish.
+- Uji batas cgroup (saturasi adversarial -> 503 terbatas, tanpa antre tanpa batas).
+- Kait reprodusibel bench/soak (`bench.sh` baseline + arsip snapshot `/metrics`).
+- Hardening Docker + skrip SBOM (`scripts/sbom.sh` + ps1 windows, fallback syft-or-cargo-tree).
+- Otomasi paket native (`packaging/` deb/rpm/tar + checklist rilis).
+- Kotak Roadmap M7 + kata RC limitations + matriks compatibility/deployment dipublikasikan.
 
-## Pase 2 DONE (this change)
+## Fase 2 SELESAI (perubahan ini)
 
-- OTel-ready correlation: `traceparent` extracted in `handle_one` + `dispatch_php`, added to every access log (`request_id + traceparent`), forwarded to PHP env. No exporter dep.
-- Resilience: `m7_resilience` (workers=2/queue=2 vs 8x `sleep.php` 5s) stays 200/503/504 + `/metrics` pool series + fast-endpoint recovery + `x-request-id`. Config gates re-asserted (`workers=0`/`queue_bound=0` rejected).
-- Ops: `deployment-matrix.md` (Docker/systemd/Windows), `performance.md` (repro bench + archive list + RC bar), `packaging/README.md` + `release.sh/ps1` (fmt/clippy/tests/build/dist+SBOM tarball).
-- RC wording: `limitations.md` M7 delta + `compatibility-matrix.md` M7 table.
+- Korelasi OTel-ready: `traceparent` diekstrak di `handle_one` + `dispatch_php`, ditambahkan ke setiap access log (`request_id + traceparent`), diteruskan ke env PHP. Tanpa dep exporter.
+- Ketahanan: `m7_resilience` (workers=2/queue=2 vs 8x `sleep.php` 5s) tetap 200/503/504 + deret pool `/metrics` + pemulihan endpoint-cepat + `x-request-id`. Gate config ditegaskan ulang (`workers=0`/`queue_bound=0` ditolak).
+- Ops: `deployment-matrix.md` (Docker/systemd/Windows), `performance.md` (bench repro + daftar arsip + bar RC), `packaging/README.md` + `release.sh/ps1` (fmt/clippy/tests/build/dist+SBOM tarball).
+- Kata RC: delta `limitations.md` M7 + tabel `compatibility-matrix.md` M7.
 
-Evidence: lib 5 ok, m7_security 4 ok, m7_resilience 2 ok, cli 6 ok, clippy clean, fmt clean.
+Bukti: lib 5 ok, m7_security 4 ok, m7_resilience 2 ok, cli 6 ok, clippy bersih, fmt bersih.

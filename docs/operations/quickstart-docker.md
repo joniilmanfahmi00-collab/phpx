@@ -1,6 +1,6 @@
-# PHPX Docker quickstart (M3 developer preview)
+# Quickstart Docker PHPX (pratinjau developer M3)
 
-Image runs as non-root (`phpx`, uid 10001). Status: v0.1 developer preview, not a production SLA. See limitations.md.
+Image berjalan sebagai non-root (`phpx`, uid 10001). Status: pratinjau developer v0.1, bukan SLA produksi. Lihat limitations.md.
 
 ## 1. Build
 
@@ -9,16 +9,16 @@ docker build -t phpx:0.1.0-dev .
 docker images | grep phpx
 ```
 
-Builder stage is `rust:1.99.1-bookworm`; runtime stage is `php:8.4-cli-bookworm` + `phpx` binary + vanilla fixture.
+Stage builder adalah `rust:1.99.1-bookworm`; stage runtime adalah `php:8.4-cli-bookworm` + binary `phpx` + fixture vanilla.
 
-## 2. Run
+## 2. Jalankan
 
 ```bash
 docker run --rm -p 8080:8080 phpx:0.1.0-dev
-# binary runs: phpx serve --config /app/phpx.toml (host 0.0.0.0:8080, vanilla fixture)
+# binary menjalankan: phpx serve --config /app/phpx.toml (host 0.0.0.0:8080, fixture vanilla)
 ```
 
-In another terminal:
+Di terminal lain:
 
 ```bash
 curl -i http://127.0.0.1:8080/healthz
@@ -26,9 +26,9 @@ curl -i http://127.0.0.1:8080/
 curl -i http://127.0.0.1:8080/style.css
 ```
 
-Expect `200` + `x-request-id` header. `HEALTHCHECK` hits `/healthz` every 15s.
+Harapkan `200` + header `x-request-id`. `HEALTHCHECK` mengenai `/healthz` tiap 15s.
 
-## 3. Non-root check
+## 3. Cek non-root
 
 ```bash
 docker run --rm phpx:0.1.0-dev whoami
@@ -37,9 +37,9 @@ docker run --rm phpx:0.1.0-dev id
 # -> uid=10001(phpx) gid=10001(phpx)
 ```
 
-## 4. Custom app (bind mount)
+## 4. App kustom (bind mount)
 
-Mount your app at `/srv/app` with `public/index.php`:
+Mount app Anda di `/srv/app` dengan `public/index.php`:
 
 ```bash
 docker run --rm -p 8080:8080 \
@@ -49,7 +49,7 @@ docker run --rm -p 8080:8080 \
   phpx serve --config /app/phpx.toml
 ```
 
-For a custom docroot, create your own `phpx.toml` (see configuration.md) and mount it:
+Untuk docroot kustom, buat `phpx.toml` sendiri (lihat configuration.md) dan mount:
 
 ```bash
 docker run --rm -p 8080:8080 \
@@ -58,7 +58,7 @@ docker run --rm -p 8080:8080 \
   phpx:0.1.0-dev
 ```
 
-Example host `phpx.toml`:
+Contoh `phpx.toml` host:
 
 ```toml
 schema_version = 1
@@ -87,11 +87,11 @@ enabled = false
 
 ```bash
 bash scripts/smoke-docker.sh
-# builds image if missing, runs detached, checks healthz/readyz, /, static, traversal 400, then stops.
+# membangun image bila hilang, berjalan detached, mengecek healthz/readyz, /, statis, traversal 400, lalu berhenti.
 ```
 
-## Notes
+## Catatan
 
-- TLS termination in M3 is in-app via Rustls (`tls=true` + PEM) or at your reverse proxy. Plain HTTP inside Docker network is normal for quickstart.
-- No volumes are required for the vanilla fixture; `/app/data` is writable for future queue DB (M5).
-- Prometheus endpoint deferred to M4; use `docker logs` for structured access logs.
+- Terminasi TLS di M3 bersifat in-app via Rustls (`tls=true` + PEM) atau di reverse proxy Anda. HTTP polos di dalam jaringan Docker wajar untuk quickstart.
+- Tanpa volume yang wajib untuk fixture vanilla; `/app/data` writable untuk DB queue (M5, sqlite/redis).
+- Endpoint Prometheus `/metrics` tersedia sejak M4; `docker logs` tetap berguna untuk access log terstruktur.

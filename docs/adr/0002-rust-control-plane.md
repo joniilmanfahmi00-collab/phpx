@@ -1,16 +1,17 @@
-## ADR-0002: Rust is the platform control plane
+## ADR-0002: Rust adalah bidang kendali (control plane) platform
 
--   **Status:** Accepted
--   **Decision:** Rust owns platform infrastructure: gateway, lifecycle
-    management, worker supervision, scheduling, queue coordination,
-    resource controls, observability, and CLI.
--   **Context:** Rust offers predictable resource control and strong
-    systems-programming capabilities. PHP remains the application
-    language and execution engine.
--   **Consequences:**
-    -   PHP application code is not rewritten in Rust.
-    -   Platform-to-runtime boundaries are explicit and versioned.
-    -   Async orchestration must not execute blocking PHP work directly
-        on Tokio executor threads.
-    -   Rust subsystem failure handling and graceful shutdown are
-        first-class design requirements.
+-   **Status:** Diterima (Accepted)
+-   **Keputusan:** Rust memegang infrastruktur platform: gateway,
+    manajemen siklus hidup, supervisi worker, penjadwalan, koordinasi
+    antrean, kendali sumber daya, observabilitas, dan CLI.
+-   **Konteks:** Rust menawarkan kendali sumber daya yang dapat
+    diprediksi serta kapabilitas pemrograman sistem yang kuat. PHP
+    tetap menjadi bahasa aplikasi dan mesin eksekusi.
+-   **Konsekuensi:**
+    -   Kode aplikasi PHP tidak ditulis ulang dalam Rust.
+    -   Batas antara platform dan runtime bersifat eksplisit dan
+        berversi.
+    -   Orkestrasi async tidak boleh mengeksekusi kerja PHP yang
+        bersifat blocking langsung di atas thread eksekutor Tokio.
+    -   Penanganan kegagalan subsistem Rust dan graceful shutdown
+        merupakan kebutuhan desain kelas utama.

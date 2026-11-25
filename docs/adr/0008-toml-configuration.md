@@ -1,17 +1,17 @@
-## ADR-0008: Configuration format and compatibility
+## ADR-0008: Format dan kompatibilitas konfigurasi
 
--   **Status:** Accepted
--   **Decision:** Use TOML for the primary human-authored configuration
-    file, with Serde-based typed deserialization and explicit schema
-    validation.
--   **Context:** Operators need a readable, reviewable configuration
-    format.
--   **Consequences:**
-    -   Configuration has an explicit schema version.
-    -   Unknown or invalid critical values fail fast with actionable
-        errors.
-    -   Defaults are documented and stable.
-    -   Environment-variable overrides use a documented naming
-        convention.
-    -   Secrets should be supplied through environment variables or
-        secret mounts, not committed to TOML files.
+-   **Status:** Diterima (Accepted)
+-   **Keputusan:** Gunakan TOML untuk file konfigurasi utama yang ditulis
+    manusia, dengan deserialisasi bertipe berbasis Serde dan validasi
+    skema yang eksplisit.
+-   **Konteks:** Operator membutuhkan format konfigurasi yang mudah
+    dibaca dan ditelaah.
+-   **Konsekuensi:**
+    -   Konfigurasi memiliki versi skema yang eksplisit.
+    -   Nilai kritis yang tidak dikenal atau tidak valid gagal cepat
+        (fail fast) dengan error yang dapat ditindaklanjuti.
+    -   Nilai default didokumentasikan dan stabil.
+    -   Override melalui variabel environment menggunakan konvensi
+        penamaan yang didokumentasikan.
+    -   Secret sebaiknya dipasok melalui variabel environment atau
+        secret mount, bukan di-commit ke file TOML.

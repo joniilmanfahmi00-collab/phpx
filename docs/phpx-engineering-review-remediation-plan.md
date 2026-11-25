@@ -1,369 +1,329 @@
-# PHPX Engineering Review & Remediation Plan
+# Rencana Review & Remediasi Engineering PHPX
 
-**Repository:** `joniilmanfahmi00-collab/phpx`\
-**Review basis:** repository files inspected on 2026-11-20\
-**Status:** recommendations, not implementation claims
+**Repositori:** `joniilmanfahmi00-collab/phpx`\
+**Basis review:** file repositori yang diinspeksi pada 2026-11-20\
+**Status:** rekomendasi, bukan klaim implementasi
 
-> This document records findings and recommended next steps. It does not
-> claim that proposed work has already been implemented or tested.
-> Re-check the current branch before acting on each item.
+> Dokumen ini mencatat temuan dan langkah berikut yang direkomendasikan.
+> Dokumen ini tidak mengklaim bahwa pekerjaan yang diusulkan sudah
+> diimplementasikan atau diuji. Periksa ulang branch terkini sebelum
+> bertindak atas tiap butir.
 
-## 1. Executive summary
+## Status tindak lanjut (2026-11-25)
 
-PHPX has a clear direction: a Rust-powered PHP application platform
-intended to run conventional PHP applications without source changes,
-with Process Runtime as the baseline and Embedded Runtime experimental.
+Sejak review 2026-11-20, seluruh jalur P0-P2 selesai dan terbukti:
 
-The repository already has useful foundations: a modular Rust workspace,
-TOML configuration, HTTP gateway, bounded execution admission, timeout
-and overload handling, operational documentation, Docker packaging,
-tests, and a proposed worker lifecycle/resource-management design.
+- **P0-A**: mode eksekusi eksplisit (`one-shot` vs `persistent`, dilaporkan CLI/JSON).
+- **P0-B**: `PersistentPool` terawasi (state machine `Starting→Ready→Busy→Ready`, drain/restart, `Failed` terminal) + test deterministik.
+- **P0-C**: guardian RSS OS + `memory_limit` sebagai `-d` PHP + sampling + test soft/hard.
+- **P0-D**: Laravel 12 + WordPress 7.1 + WooCommerce 11.3 asli (`p0d_laravel` 5/5, `p0d_wordpress` 13/13).
+- **P1-A**: matriks resiliensi 9 test + ambang penerimaan (`resilience.md`).
+- **P1-B**: bench lab + repeat + gate CV + multipart `$_POST`/`$_FILES` + driver Redis + autoscale adaptif opt-in.
+- **P2**: EmbeddedPool single-flight + `runtime.mode=embedded` terkabel (9/9 gerbang linked, `p2_embedded_gateway` 5/5); CLI melaporkan pool embedded.
+- **Soak**: arsip 60 menit (12.600/12.600, +3,6 KB/mnt) + **6 jam (73.600/73.600, gagal 0, -0,86 KB/mnt)** — lihat `docs/operations/soak.md`.
 
-The main gap is between the intended **supervised worker and
-resource-management model** and the current Process Runtime execution
-path. The inspected `phpx-worker` path calls
-`phpx_runtime_process::execute_one_shot(...)` for each admitted request.
-This gives request-level process isolation, but is not yet a persistent,
-individually supervised PHP worker pool with per-worker health and
-RSS-aware recycling.
+Sisa menuju RC ada di `docs/operations/release-gates.md` (rekor RC di hardware RC, SLO formal, tren 24 jam). Isi review di bawah ini dipertahankan sebagai rekaman historis 2026-11-20.
 
-The next step should not be adding more platform features. It should be
-making Process Runtime lifecycle and resource behavior explicit,
-measurable, and testable.
+## 1. Ringkasan eksekutif
 
-## 2. Product framing to preserve
+PHPX punya arah jelas: platform aplikasi PHP bertenaga Rust yang
+dimaksudkan menjalankan aplikasi PHP konvensional tanpa perubahan sumber,
+dengan Process Runtime sebagai baseline dan Embedded Runtime eksperimental.
 
-PHPX should not be framed as a project whose sole goal is to beat Go,
-FrankenPHP, RoadRunner, or another runtime on raw RPS.
+Repositori sudah punya fondasi berguna: workspace Rust modular,
+konfigurasi TOML, gateway HTTP, admission eksekusi terbatas, penanganan
+timeout dan overload, dokumentasi operasional, packaging Docker, test,
+dan desain siklus-hidup worker/manajemen-resource yang diusulkan.
 
-Its intended value is broader:
+Kesenjangan utama adalah antara model **worker terawasi dan
+manajemen-resource** yang dimaksud dengan jalur eksekusi Process Runtime
+saat itu. Jalur `phpx-worker` yang diinspeksi memanggil
+`phpx_runtime_process::execute_one_shot(...)` untuk tiap request yang
+diakui. Ini memberi isolasi process level-request, tetapi belum pool
+worker PHP persistent yang terawasi individual dengan health per-worker
+dan recycling sadar-RSS.
 
-1.  **Resource management:** observe and control worker/process resource
-    consumption.
-2.  **Runtime lifecycle orchestration:** start, monitor, drain, recycle,
-    and replace execution workers predictably.
-3.  **Reliability and resilience:** contain failures, recover from
-    worker exits, prevent restart loops, and apply bounded backpressure.
-4.  **Strict PHP compatibility:** run conventional PHP applications
-    without requiring PHPX-specific source changes.
-5.  **Performance:** remain an important measurable dimension, but not
-    the only success criterion.
+Langkah berikut seharusnya bukan menambah fitur platform lagi. Melainkan
+membuat perilaku lifecycle dan resource Process Runtime eksplisit,
+terukur, dan teruji. (Catatan 2026-11-25: sudah dikerjakan via P0-B/P0-C.)
 
-Concurrency is a workload condition and a test dimension. It is not the
-entire product definition.
+## 2. Framing produk yang harus dijaga
 
-### Claims discipline
+PHPX seharusnya tidak dibingkai sebagai proyek yang tujuan satu-satunya
+mengalahkan Go, FrankenPHP, RoadRunner, atau runtime lain pada RPS mentah.
 
-Do not claim that PHPX: - is leak-free because its control plane is
-written in Rust; - cannot crash; - guarantees a particular recovery time
-before it is measured; - supports a framework comprehensively because a
-minimal fixture passes; - is production-ready solely because a benchmark
-produces a high RPS result.
+Nilai yang dimaksud lebih luas:
 
-Rust ownership and borrowing reduce important classes of memory-safety
-errors in Rust code, but do not prove that the complete system is free
-from leaks, deadlocks, resource exhaustion, logic errors, or failures in
-PHP and native extensions.
+-   Runtime PHP yang dapat diprediksi dan teramati untuk app konvensional.
+-   Batas operasional eksplisit (antre, worker, memori, timeout).
+-   Kompatibilitas ketat dengan app PHP yang ada.
+-   Perkakas operator (CLI, doctor, metrik, panduan deployment).
+-   Jalur embedded eksperimental yang jujur tentang statusnya.
 
-## 3. Repository findings
+## 3. Temuan repositori (snapshot 2026-11-20)
 
-### 3.1 Existing strengths
+### 3.1 Kekuatan yang ada
 
-The inspected repository shows: - A modular Cargo workspace with
-separate crates for core, config, CLI, runtime backends, worker/server,
-and platform services. - A Process Runtime-first policy. - An Embedded
-Runtime explicitly treated as experimental and disabled by default. - A
-technical specification describing bounded queues, backpressure, request
-envelopes, runtime lifecycle, and compatibility requirements. - A
-proposed ADR-0014 describing worker states, health signals, soft/hard
-memory thresholds, recycling, restart protection, and deferred adaptive
-scaling. - Operational documentation and scripts for quickstarts,
-performance baselines, soak testing, and deployment. - A Docker image
-designed to run as a non-root user. - A benchmark report that labels
-developer-machine results as non-SLA and warns that Windows sequential
-and WSL2 parallel runs are not directly comparable.
+Repositori yang diinspeksi menunjukkan: - Workspace Cargo modular dengan
+crate terpisah untuk core, config, CLI, backend runtime, worker/server,
+dan layanan platform. - Kebijakan Process Runtime dulu. - Embedded
+Runtime eksplisit diperlakukan eksperimental dan nonaktif default. -
+Spesifikasi teknis yang menjelaskan antre terbatas, backpressure,
+envelope request, lifecycle runtime, dan syarat kompatibilitas. -
+Usulan ADR-0014 tentang state worker, sinyal health, ambang memori
+soft/hard, recycling, proteksi restart, dan scaling adaptif yang
+ditunda. - Dokumentasi operasional dan skrip untuk quickstart,
+baseline performa, soak test, dan deployment. - Image Docker yang
+dirancang jalan sebagai non-root. - Laporan benchmark yang melabeli
+hasil mesin developer sebagai non-SLA dan memperingatkan bahwa run
+sekuensial Windows dan paralel WSL2 tidak dapat dibandingkan langsung.
 
-### 3.2 Main implementation gap: one-shot versus persistent workers
+### 3.2 Kesenjangan implementasi utama: worker one-shot versus persistent
 
-The inspected `crates/phpx-worker/src/lib.rs` uses
-`execute_one_shot(...)` for each admitted request.
+`crates/phpx-worker/src/lib.rs` yang diinspeksi memakai
+`execute_one_shot(...)` untuk tiap request yang diakui. (Catatan 2026-11-25:
+kini ada `PersistentPool` P0-B dan `EmbeddedPool` P2 di sampingnya.)
 
-Consequences: - The current bounded admission mechanism can cap
-concurrent executions and bound waiting requests. - Each request
-receives a fresh PHP process, so process-level state does not persist
-between requests in the same worker. - The current design does not yet
-demonstrate a persistent PHP worker pool with individually tracked
-worker identities and lifecycle states. - A logical request/recycling
-counter must not be presented as proof that a persistent OS process was
-recycled. - Per-worker RSS, uptime, request count, exit reason, health
-state, and memory-triggered recycling require a persistent worker
-identity and supervisor.
+Konsekuensi (saat itu): - Mekanisme admission terbatas saat itu bisa
+membatasi eksekusi konkuren dan membatasi request menunggu. - Tiap
+request mendapat proses PHP fresh, sehingga state level-process tidak
+bertahan antar request dalam worker yang sama. - Desain saat itu belum
+menunjukkan pool worker PHP persistent dengan identitas worker
+individual dan state lifecycle yang dilacak. - Counter request/recycling
+logis tidak boleh disajikan sebagai bukti bahwa proses OS persistent
+di-recycle. - RSS per-worker, uptime, jumlah request, alasan keluar,
+state health, dan recycling picu-memori butuh identitas worker
+persistent dan supervisor.
 
-This is an architectural distinction, not automatically a defect.
-One-shot execution can remain useful as a compatibility or isolation
-mode. Product and documentation must distinguish it from persistent
-worker mode.
+Ini perbedaan arsitektural, bukan otomatis cacat. Eksekusi one-shot bisa
+tetap berguna sebagai mode kompatibilitas atau isolasi. Produk dan
+dokumentasi harus membedakannya dari mode worker persistent.
+(Status 2026-11-25: dibedakan eksplisit via `execution_mode`.)
 
-### 3.3 Resource configuration is not yet the full proposed guardian
+### 3.3 Konfigurasi resource belum menjadi guardian penuh yang diusulkan
 
-The inspected `RuntimeProcessConfig` includes worker count, minimum
-workers, maximum requests, request/startup timeouts, a memory-limit
-string, queue bound/wait timeout, drain timeout, and restart/backoff
-settings.
+`RuntimeProcessConfig` yang diinspeksi mencakup jumlah worker, worker
+minimum, maksimum request, timeout request/startup, string batas-memori,
+queue bound/wait timeout, drain timeout, dan setting restart/backoff.
+(Status 2026-11-25: guardian P0-C terimplementasi — sampling RSS per-worker,
+recycle graceful soft, terminasi protektif hard.)
 
-Configuration alone does not prove that OS-level per-worker RSS
-sampling, soft-threshold graceful recycling, hard-threshold protective
-termination, or adaptive resource control are implemented.
+Konfigurasi saja tidak membuktikan sampling RSS per-worker level-OS,
+recycling graceful ambang-soft, terminasi protektif ambang-hard, atau
+kontrol resource adaptif terimplementasi.
 
-Document each setting according to its actual enforcement point: -
-PHP-level limit; - PHPX process-supervision policy; - OS/container
-enforcement; - advisory/diagnostic threshold.
+Dokumentasikan tiap setting sesuai titik enforcement aktualnya: -
+batas level-PHP; - kebijakan supervisi-process PHPX; - enforcement
+OS/container; - ambang advisory/diagnostik.
 
-Do not imply that PHP `memory_limit` is equivalent to an OS process RSS
-limit.
+Jangan menyiratkan bahwa `memory_limit` PHP setara batas RSS proses OS.
 
-### 3.4 Embedded Runtime status
+### 3.4 Status Embedded Runtime
 
-Keep Embedded Runtime experimental and disabled by default until real
-PHP Embed SAPI execution, ABI handling, lifecycle constraints,
-compatibility, and failure containment have been validated.
+Jaga Embedded Runtime eksperimental dan nonaktif default hingga eksekusi
+PHP Embed SAPI nyata, penanganan ABI, batasan lifecycle,
+kompatibilitas, dan containment kegagalan tervalidasi. (Catatan 2026-11-25:
+syarat ini kini terpenuhi pada build linked — 9/9 gerbang, serve path
+terkabel; default tetap `process`.)
 
-A capability stub or availability report is not equivalent to a working
-embedded PHP execution backend.
+Stub kapabilitas atau laporan ketersediaan tidak setara backend eksekusi
+PHP embedded yang bekerja.
 
-### 3.5 Compatibility evidence needs explicit levels
+### 3.5 Bukti kompatibilitas butuh level eksplisit
 
-Minimal fixtures are useful for contract and smoke tests, but are not
-equivalent to comprehensive tests against real framework/application
-distributions.
+Fixture minimal berguna untuk test kontrak dan smoke, tetapi tidak setara
+test komprehensif terhadap distribusi framework/aplikasi nyata.
 
-  -----------------------------------------------------------------------
-  Level                               Evidence
-  ----------------------------------- -----------------------------------
-  Fixture tested                      A minimal purpose-built fixture
-                                      passes.
+Level bukti yang dipakai (lihat `compatibility-matrix.md`):
 
-  Framework smoke tested              An actual framework installation
-                                      boots and serves basic requests.
+- Fixture tested — fixture minimal buatan lolos.
+- Framework smoke tested — instalasi framework asli boot dan melayani request dasar.
+- Integration tested — lifecycle, routing, session, upload, dan dependensi framework yang relevan diuji.
+- Application validated — aplikasi nyata representatif lolos suite test terdokumentasi.
+- Production validated — deployment dan workload mirip-produksi dilatih dengan batasan terdokumentasi.
 
-  Integration tested                  Relevant framework lifecycle,
-                                      routing, sessions, uploads, and
-                                      dependencies are tested.
+Jangan gambarkan Laravel, WordPress, atau WooCommerce sebagai didukung
+penuh melampaui bukti terkuat yang tersedia untuk rilis spesifik.
+(Status 2026-11-25: level kami = integration tested pada app asli + batas
+SAPI eksplisit yang dipin test.)
 
-  Application validated               A representative real application
-                                      passes a documented test suite.
+### 3.6 Bukti benchmark saat ini adalah baseline developer
 
-  Production validated                A production-like deployment and
-                                      workload have been exercised with
-                                      documented limitations.
-  -----------------------------------------------------------------------
+`docs/operations/performance.md` yang diinspeksi mencatat baseline kecil
+mesin developer dan memperingatkan eksplisit bahwa run sekuensial
+Windows dan run paralel WSL2 tidak apple-to-apple. Ini disiplin
+dokumentasi yang baik.
 
-Do not describe Laravel, WordPress, or WooCommerce as fully supported
-beyond the strongest evidence available for the specific release.
+Hasil ini berguna untuk pelacakan regresi, bukan klaim performa atau
+produksi luas. Perluas metodologi sebelum menarik kesimpulan tentang
+throughput berkelanjutan, tail latency, efisiensi memori, perilaku
+memori jangka-panjang, stabilitas worker persistent, crash recovery,
+atau perbandingan dengan alternatif. (Catatan 2026-11-25: lab P1-B +
+repeat + arsip soak 60 menit/6 jam memperluas ini; rekor RC tetap
+pekerjaan lanjutan.)
 
-### 3.6 Benchmark evidence is currently a developer baseline
+## 4. Roadmap implementasi yang direkomendasikan (status: selesai P0-P2)
 
-The inspected `docs/operations/performance.md` records a small
-developer-machine baseline and explicitly warns that the Windows
-sequential run and WSL2 parallel run are not apples-to-apples. This is
-good documentation discipline.
+### P0-A: Buat mode eksekusi eksplisit — DONE
 
-These results are useful for regression tracking, not broad performance
-or production claims. Extend methodology before drawing conclusions
-about sustained throughput, tail latency, memory efficiency, long-run
-memory behavior, persistent worker stability, crash recovery, or
-comparisons with alternatives.
+**Tujuan:** cegah eksekusi one-shot tertukar dengan supervisi worker persistent.
 
-## 4. Recommended implementation roadmap
+Tugas: - Namai dan dokumentasikan jalur eksekusi saat ini sebagai one-shot
+bila cocok dengan jalur kode aktual. - Jaga mode one-shot tersedia di mana
+trade-off isolasi/kompatibilitasnya berguna. - Definisikan kontrak eksekusi
+worker-persistent terpisah. - Definisikan identitas worker dan identitas
+inkarnasi. - Definisikan transport request dan versi protokol antara
+supervisor Rust dan worker PHP. - Pastikan eksekusi PHP yang blocking tidak
+pernah jalan langsung di thread eksekutor Tokio. - Dokumentasikan aplikasi
+mana yang bisa memakai mode persistent dan bagaimana batasan reset-state
+ditangani.
 
-### P0-A: Make execution modes explicit
+Kriteria penerimaan: - CLI/konfigurasi melaporkan mode eksekusi aktual yang
+dipilih. - Metrik membedakan eksekusi one-shot dari request worker
+persistent. - Test membuktikan lifetime process one-shot terlingkup request.
+- Mode persistent tidak diiklankan hingga proses PHP berumur-panjang yang
+nyata disupervisi.
 
-**Goal:** prevent one-shot execution from being confused with persistent
-worker supervision.
+### P0-B: Implementasikan lifecycle worker persistent deterministik — DONE
 
-Tasks: - Name and document the current execution mode as one-shot if
-that matches the actual code path. - Keep one-shot mode available where
-its isolation/compatibility trade-off is useful. - Define a separate
-persistent-worker execution contract. - Define worker identity and
-incarnation identity. - Define request transport and protocol version
-between Rust supervisor and PHP worker. - Ensure blocking PHP execution
-never runs directly on Tokio executor threads. - Document which
-applications can use persistent mode and how state-reset limitations are
-handled.
+**Tujuan:** bangun pool worker terawasi berukuran-tetap sebelum scaling adaptif.
 
-Acceptance criteria: - CLI/configuration reports the actual selected
-execution mode. - Metrics distinguish one-shot executions from
-persistent worker requests. - Tests prove that one-shot process lifetime
-is request-scoped. - Persistent mode is not advertised until a real
-long-lived PHP process is supervised.
-
-### P0-B: Implement deterministic persistent worker lifecycle
-
-**Goal:** build a fixed-size supervised worker pool before adaptive
-scaling.
-
-Suggested states:
+State yang disarankan (terimplementasi):
 
 `Starting -> Ready -> Busy -> Ready`
 
-Additional transitions: - `Ready -> Draining -> Stopped` -
-`Busy -> Draining -> Stopped` after the current request -
-`Busy -> Unhealthy -> Restarting -> Ready` - `Starting -> Failed`
+Transisi tambahan: - `Ready -> Draining -> Stopped` - `Busy -> Draining -> Stopped`
+setelah request berjalan - `Busy -> Unhealthy -> Restarting -> Ready` - `Starting -> Failed`
 
-Tasks: - Spawn a configured fixed number of PHP worker processes. -
-Track PID, worker ID, incarnation, state, start time, completed request
-count, and exit reason. - Implement startup handshake and readiness
-timeout. - Assign no more than one request per process worker by
-default. - Implement bounded queue and explicit overload behavior. -
-Drain workers during reload and shutdown. - Apply restart backoff,
-jitter, rolling restart budget, and crash-loop protection. - Avoid
-replacing every worker simultaneously during routine recycling.
+Tugas: - Spawn sejumlah worker PHP terkonfigurasi berukuran-tetap. - Lacak
+PID, ID worker, inkarnasi, state, waktu start, jumlah request selesai, dan
+alasan keluar. - Implementasikan handshake startup dan timeout readiness. -
+Jangan tugaskan lebih dari satu request per worker process secara default.
+- Implementasikan antre terbatas dan perilaku overload eksplisit. - Drain
+worker saat reload dan shutdown. - Terapkan backoff restart, jitter, budget
+restart rolling, dan proteksi crash-loop. - Hindari mengganti semua worker
+serentak saat recycling rutin.
 
-Acceptance criteria: - Worker state transitions are covered by
-deterministic tests. - A worker crash does not crash the gateway. - A
-replacement becomes ready only after a successful handshake. - Queue
-capacity and wait time are bounded and observable. - Graceful shutdown
-drains in-flight work within a configured deadline. - Repeated startup
-failures stop at the configured restart budget and expose a diagnostic
-reason.
+Kriteria penerimaan: - Transisi state worker diliput test deterministik. -
+Crash worker tidak menjatuhkan gateway. - Pengganti menjadi ready hanya
+setelah handshake sukses. - Kapasitas antre dan waktu tunggu terbatas dan
+teramati. - Shutdown graceful men-drain kerja in-flight dalam deadline
+terkonfigurasi. - Kegagalan startup berulang berhenti pada budget restart
+terkonfigurasi dan mengekspos alasan diagnostik.
 
-### P0-C: Implement Resource Health & Memory Guardian
+### P0-C: Implementasikan Resource Health & Memory Guardian — DONE
 
-**Goal:** make resource management an observable control loop, not
-merely a configuration promise.
+**Tujuan:** jadikan manajemen resource loop kontrol yang teramati, bukan
+sekadar janji konfigurasi.
 
-Collect per worker where supported: - RSS and peak RSS; - uptime; -
-completed request count; - request duration; - startup and shutdown
-duration; - exit code and termination reason; - restart count and
-restart frequency; - current worker state; - last successful health
-check.
+Kumpulkan per worker bila didukung: - RSS dan peak RSS; - uptime; - jumlah
+request selesai; - durasi request; - durasi startup dan shutdown; - exit code
+dan alasan terminasi; - jumlah dan frekuensi restart; - state worker saat
+ini; - cek health sukses terakhir.
 
-Define separate policies:
+Kebijakan terpisah:
 
-**Soft memory threshold** - Mark the worker for recycling. - Stop
-assigning new work. - Let the current request finish within the drain
-deadline. - Shut down and replace the worker.
+**Ambang memori soft** - Tandai worker untuk recycling. - Hentikan
+pemberian kerja baru. - Biarkan request berjalan selesai dalam deadline
+drain. - Matikan dan ganti worker.
 
-**Hard memory threshold** - Trigger a documented protective action. - If
-graceful recovery is no longer safe, terminate the worker. - Record the
-reason and recovery outcome.
+**Ambang memori hard** - Picu aksi protektif terdokumentasi. - Bila
+recovery graceful tak lagi aman, terminasi worker. - Catat alasan dan hasil
+recovery.
 
-Important limitations: - Sampling intervals and termination latency can
-cause threshold overshoot. - RSS is not the same as PHP heap usage. -
-Stable RSS does not prove there is no leak. - RSS remaining high does
-not automatically prove a leak. - PHP allocator behavior, native
-extensions, shared libraries, and memory fragmentation affect observed
-memory.
+Batasan penting: - Interval sampling dan latensi terminasi bisa menyebabkan
+overshoot ambang. - RSS tidak sama dengan pemakaian heap PHP. - RSS stabil
+tidak membuktikan tidak ada bocor. - RSS tetap tinggi tidak otomatis
+membuktikan bocor. - Perilaku alokator PHP, ekstensi nativ, shared library,
+dan fragmentasi memori memengaruhi memori teramati.
 
-Acceptance criteria: - Metrics expose per-worker memory and lifecycle
-data. - Soft-threshold recycling is tested with a controlled memory
-workload. - Hard-threshold action is tested in an isolated
-environment. - Threshold overshoot and sampling interval are
-documented. - Worker replacement and recovery are observable. - No claim
-of leak-free behavior is made solely from RSS measurements.
+Kriteria penerimaan: - Metrik mengekspos memori dan data lifecycle
+per-worker. - Recycling ambang-soft diuji dengan beban memori terkendali. -
+Aksi ambang-hard diuji di lingkungan terisolasi. - Overshoot ambang dan
+interval sampling didokumentasikan. - Penggantian dan recovery worker
+teramati. - Tidak ada klaim perilaku bebas-bocor hanya dari pengukuran RSS.
 
-### P0-D: Build real compatibility tests
+### P0-D: Bangun test kompatibilitas nyata — DONE
 
-**Goal:** validate strict compatibility using actual PHP applications.
+**Tujuan:** validasi kompatibilitas ketat memakai aplikasi PHP aktual.
 
-Start with: 1. Vanilla PHP application. 2. A real Composer-based
-application. 3. A real Laravel installation. 4. A real WordPress
-installation. 5. WooCommerce after WordPress coverage is reliable.
+Mulai dengan: 1. Aplikasi PHP vanilla. 2. Aplikasi berbasis Composer yang
+nyata. 3. Instalasi Laravel nyata. 4. Instalasi WordPress nyata.
+5. WooCommerce setelah cakupan WordPress andal.
 
-Test at minimum: - front-controller routing; - `$_SERVER`, request
-method, query string, and headers; - request body and JSON; - cookies
-and sessions; - file uploads; - response headers and status; -
-environment variables; - Composer autoload; - error handling and output
-buffering; - static assets and path safety; - shutdown behavior; -
-persistent-worker state leakage, if persistent mode is enabled.
+Uji minimal: - routing front-controller; - `$_SERVER`, method request,
+query string, dan header; - body request dan JSON; - cookie dan session; -
+upload file; - header dan status respons; - environment variable; - autoload
+Composer; - penanganan error dan buffering output; - aset statik dan
+keamanan path; - perilaku shutdown; - bocor state worker-persistent, bila
+mode persistent aktif.
 
-Publish a version/extension matrix per release. Mark unsupported
-extensions and runtime limitations explicitly.
+Publikasikan matriks versi/ekstensi per rilis. Tandai ekstensi tak didukung
+dan batasan runtime eksplisit.
 
-Acceptance criteria: - Tests run against real upstream
-framework/application packages. - Each compatibility claim links to
-relevant test evidence. - Fixtures and real application tests are
-reported separately. - No source modification is required for the
-conventional compatibility baseline, unless a limitation is clearly
-documented.
+Kriteria penerimaan: - Test berjalan terhadap paket framework/aplikasi
+upstream nyata. - Tiap klaim kompatibilitas tertaut ke bukti test relevan.
+- Fixture dan test aplikasi nyata dilaporkan terpisah. - Tidak perlu
+modifikasi sumber untuk baseline kompatibilitas konvensional, kecuali
+batasannya didokumentasikan jelas.
 
-### P1-A: Resilience and soak testing
+### P1-A: Test resiliensi dan soak — DONE
 
-Add repeatable tests for: - worker crash while idle; - worker crash
-while processing a request; - request timeout; - startup failure; -
-restart-loop protection; - graceful reload; - graceful shutdown with
-in-flight requests; - queue saturation and overload response; -
-memory-threshold recycling; - long-running memory trend; - state leakage
-between requests.
+Tambah test berulang untuk: - crash worker saat idle; - crash worker saat
+memproses request; - timeout request; - gagal startup; - proteksi
+restart-loop; - reload graceful; - shutdown graceful dengan request
+in-flight; - saturasi antre dan respons overload; - recycling ambang-memori;
+- tren memori jangka-panjang; - bocor state antar request.
 
-Run short and long soak tests. Archive raw logs, environment metadata,
-configuration, and result summaries.
+Jalankan soak test pendek dan panjang. Arsipkan log mentah, metadata
+lingkungan, konfigurasi, dan ringkasan hasil. (Arsip: 60 menit + 6 jam.)
 
-Measure recovery time from clearly defined events: - failure detection
-timestamp; - restart initiated timestamp; - replacement ready
-timestamp; - first successful request timestamp.
+Ukur waktu recovery dari event yang didefinisikan jelas: - timestamp
+deteksi kegagalan; - timestamp restart diinisiasi; - timestamp pengganti
+ready; - timestamp request sukses pertama.
 
-Report these separately rather than using one ambiguous "recovery time".
+Laporkan terpisah, jangan pakai satu "waktu recovery" yang ambigu.
 
-### P1-B: Benchmark laboratory
+### P1-B: Laboratorium benchmark — DONE
 
-Keep performance, resource efficiency, stability, and reliability as
-separate dimensions.
+Jaga performa, efisiensi resource, stabilitas, dan reliabilitas sebagai
+dimensi terpisah (throughput, latensi p50/p95/p99/maks, cold start, jalur
+warm, efisiensi resource, stabilitas memori tren 1j/6j/24j, reliabilitas,
+operasi). Aturan banding: hardware dan OS sama, versi PHP dan ekstensi sama,
+app dan datastore sama, mix dan payload request sama, konkurensi dan durasi
+sama, tuning dan batas worker setara, build release untuk klaim performa,
+laporkan pengukuran dan konfigurasi mentah. (Lab + repeat + gate CV +
+multipart + Redis selesai.)
 
-  Dimension             Suggested measurements
-  --------------------- -------------------------------------------------
-  Throughput            Requests per second
-  Latency               p50, p95, p99, maximum
-  Cold start            First request and process startup
-  Warm path             Steady-state request latency
-  Resource efficiency   Idle/peak RSS, CPU, requests per MB
-  Memory stability      RSS trend over 1h, 6h, 24h
-  Reliability           Failure rate, crash frequency, recovery success
-  Operations            Drain time, restart time, overload behavior
+Bandingkan PHPX dengan alternatif relevan hanya bila setup adil dan dapat
+diulang. Jangan mengarang target RPS absolut sebelum workload representatif
+mapan.
 
-Comparison rules: - Same hardware and operating system. - Same PHP
-version and extensions. - Same application and datastore. - Same request
-mix and payload. - Same concurrency and duration. - Equivalent tuning
-and worker limits. - Release builds for performance claims. - Report raw
-measurements and configuration.
+### P2: Manajemen worker adaptif — DONE (opt-in)
 
-Compare PHPX with relevant alternatives only when the setup is fair and
-reproducible. Do not invent absolute RPS targets before establishing
-representative workloads.
+Tunda scaling dinamis hingga perilaku pool-tetap stabil. (Selesai: sinyal
+kedalaman antre + jumlah aktif vs kapasitas terspawn; pengaman min/maks,
+hysteresis, cooldown, memory guard, tidak pernah saat drain; nonaktif
+default hingga bukti berulang.)
 
-### P2: Adaptive worker management
+### P2: Embedded Runtime — DONE (serve path terkabel)
 
-Defer dynamic scaling until fixed-pool behavior is stable.
+Jaga Embedded Runtime eksperimental dan nonaktif default. (Terpenuhi.)
 
-Potential signals: - queue depth and queue wait time; - active/ready
-worker counts; - CPU pressure; - memory headroom.
+Gerbang promosi (semua lolos pada build linked): - eksekusi PHP Embed SAPI
+nyata; - build PHP dan matriks ABI yang didukung; - domain eksekusi
+terkendali dan batasan thread; - aturan ownership/lifetime jelas lintas C
+ABI; - test kompatibilitas ekstensi; - test isolasi state request; - strategi
+containment kegagalan; - paritas pada suite kompatibilitas untuk tiap
+kapabilitas yang diklaim.
 
-Required safeguards: - minimum and maximum workers; - scale-up and
-scale-down thresholds; - hysteresis; - cooldown; - host-level memory
-safeguards; - minimum ready capacity.
+Jangan promosikan berdasar throughput semata.
 
-Adaptive mode should remain disabled by default until repeatable
-evidence shows that it improves outcomes without causing oscillation or
-resource pressure.
+## 5. Metrik dan terminologi yang disarankan
 
-### P2: Embedded Runtime
+Pakai nama presisi dan hindari counter agregat ambigu.
 
-Keep Embedded Runtime experimental and disabled by default.
-
-Promotion gates: - real PHP Embed SAPI execution; - supported PHP build
-and ABI matrix; - controlled execution domain and thread constraints; -
-clear ownership/lifetime rules across the C ABI; - extension
-compatibility tests; - request state isolation tests; - failure
-containment strategy; - parity on the compatibility suite for every
-claimed capability.
-
-Do not promote it based on throughput alone.
-
-## 5. Suggested metrics and terminology
-
-Use precise names and avoid ambiguous aggregate counters.
-
-### Worker metrics
+### Metrik worker
 
 -   `phpx_worker_state`
 -   `phpx_worker_rss_bytes`
@@ -374,7 +334,10 @@ Use precise names and avoid ambiguous aggregate counters.
 -   `phpx_worker_startup_duration_seconds`
 -   `phpx_worker_shutdown_duration_seconds`
 
-### Queue and gateway metrics
+(Catatan 2026-11-25: seri `phpx_pool_*` dan `phpx_worker_*` terimplementasi;
+lihat `metrics.md`.)
+
+### Metrik antre dan gateway
 
 -   `phpx_requests_total{outcome=...}`
 -   `phpx_request_duration_seconds`
@@ -384,103 +347,102 @@ Use precise names and avoid ambiguous aggregate counters.
 -   `phpx_worker_capacity`
 -   `phpx_worker_active`
 
-Metric names are proposals. Align them with repository naming
-conventions before implementation. Avoid high-cardinality labels such as
-request IDs, raw URLs, or user identifiers.
+Nama metrik adalah usulan. Selaraskan dengan konvensi penamaan repositori
+sebelum implementasi. Hindari label kardinalitas-tinggi seperti ID request,
+URL mentah, atau pengenal pengguna.
 
-### Recovery measurements
+### Pengukuran recovery
 
-Record: - detection latency; - restart scheduling delay; - worker
-startup duration; - readiness delay; - time to first successful
-request; - total recovery duration.
+Catat: - latensi deteksi; - jeda penjadwalan restart; - durasi startup
+worker; - jeda readiness; - waktu ke request sukses pertama; - durasi
+recovery total. (Terimplementasi via `WorkerSnapshot::last_recovery` +
+seri `phpx_worker_last_recovery_duration_seconds`.)
 
-## 6. Documentation corrections
+## 6. Koreksi dokumentasi
 
-Update documentation so implemented behavior, tested behavior,
-experimental behavior, and planned behavior are visibly distinct.
+Perbarui dokumentasi agar perilaku terimplementasi, perilaku teruji,
+perilaku eksperimental, dan perilaku terencana terlihat berbeda.
 
-Recommended capability labels: - **Implemented:** code path exists. -
-**Tested:** automated or documented test evidence exists. -
-**Experimental:** available for evaluation, not a stable contract. -
-**Stub:** interface or placeholder exists, but real execution is
-absent. - **Deferred:** intentionally postponed. - **Unsupported:**
-explicitly not supported.
+Label kapabilitas yang direkomendasikan: - **Implemented:** jalur kode ada. -
+**Tested:** bukti test otomatis atau terdokumentasi ada. -
+**Experimental:** tersedia untuk evaluasi, bukan kontrak stabil. -
+**Stub:** antarmuka atau placeholder ada, tetapi eksekusi nyata tidak ada. -
+**Deferred:** sengaja ditunda. - **Unsupported:** eksplisit tidak didukung.
 
-Specific documentation work: - README: summarize actual v0.1 capability
-and limitations. - Technical specification: distinguish target
-architecture from current implementation. - ADR-0014: retain as proposed
-until accepted; link implementation PRs/tests when decisions are
-implemented. - Performance report: preserve current developer baseline
-and add future release-mode/soak results separately. - Compatibility
-matrix: separate fixtures from real framework/application validation. -
-CLI help: report actual runtime capabilities, not aspirational
-capabilities.
+Pekerjaan dokumentasi spesifik (status 2026-11-25): - README: meringkas
+kapabilitas dan batasan v0.1 aktual — DONE (diterjemahkan Indonesia). -
+Spesifikasi teknis: membedakan arsitektur target dari implementasi kini —
+DIPERBARUI (lihat TECHNICAL_SPEC_v0.1.md). - ADR-0014: pertahankan sebagai
+proposed hingga diterima; tautkan test implementasi — SEBAGIAN (test
+tertulis; status formal tetap Proposed). - Laporan performa: pertahankan
+baseline developer kini dan tambah hasil release-mode/soak terpisah —
+DONE (lab + arsip soak 60 mnt/6 jam). - Matriks kompatibilitas: pisahkan
+fixture dari validasi framework/aplikasi nyata — DONE. - CLI help:
+laporkan kapabilitas runtime aktual, bukan aspirasional — DONE (inspect
+melaporkan pool embedded bila mode=embedded).
 
-## 7. Release gates
+## 7. Gerbang rilis
 
-Do not promote a release merely because the planned feature list is
-complete.
+Jangan promosikan rilis hanya karena daftar fitur rencana selesai.
 
-### Developer preview
+### Developer preview — DONE
 
--   Basic gateway and execution path works.
--   Known limitations are documented.
--   No production SLA implied.
+-   Gateway dasar dan jalur eksekusi bekerja.
+-   Keterbatasan yang diketahui didokumentasikan.
+-   Tanpa SLA produksi tersirat.
 
-### Alpha
+### Alpha — DONE
 
--   Fixed worker lifecycle is deterministic.
--   Bounded queue and backpressure are tested.
--   Worker crash and restart behavior are observable.
--   Core compatibility tests pass.
+-   Siklus hidup worker tetap deterministik.
+-   Antre terbatas dan backpressure teruji.
+-   Perilaku crash dan restart worker teramati.
+-   Test kompatibilitas inti lolos.
 
-### Beta
+### Beta — DONE
 
--   Resource guardian is implemented and tested.
--   Real Laravel and WordPress smoke/integration tests exist.
--   Soak and failure-injection tests are repeatable.
--   Security and deployment limitations are documented.
+-   Resource guardian diimplementasikan dan teruji.
+-   Smoke/integration test Laravel dan WordPress nyata ada.
+-   Soak dan failure-injection dapat diulang (arsip 60 menit + 6 jam).
+-   Keterbatasan keamanan dan deployment didokumentasikan.
+-   Serve path embedded terkabel dengan fail-closed jujur.
 
-### Release candidate
+### Release candidate — NOT DONE
 
--   Release-mode benchmarks are reproducible.
--   Recovery and memory behavior meet documented acceptance criteria.
--   Compatibility matrix is published.
--   No unresolved critical security or data-integrity issues.
+-   Benchmark mode-rilis dapat diulang. (Parsial: metodologi + arsip soak 6 jam ada; rekor RC hardware RC belum.)
+-   Perilaku recovery dan memori memenuhi kriteria penerimaan terdokumentasi. (Ambangan ada; SLO formal belum.)
+-   Matriks kompatibilitas dipublikasikan. (DONE.)
+-   Tanpa isu keamanan atau integritas-data kritis yang belum selesai. (DONE.)
 
-### Stable 1.0
+### Stabil 1.0 — NOT DONE
 
--   All published 1.0 claims have test evidence.
--   Upgrade, rollback, and operational procedures are documented.
--   Supported PHP/OS/extension matrix is explicit.
--   Release artifacts are reproducible and verified.
+-   Semua klaim 1.0 yang dipublikasikan punya bukti test.
+-   Prosedur upgrade, rollback, operasional didokumentasikan.
+-   Matriks PHP/OS/ekstensi yang didukung eksplisit.
+-   Artefak rilis dapat direproduksi dan terverifikasi.
 
-## 8. Immediate next actions
+## 8. Tindakan berikut segera (urutan yang direkomendasikan — semua selesai)
 
-Recommended order for the next engineering cycle:
+1.  ~~Audit dan labeli jalur eksekusi one-shot kini secara akurat.~~ DONE (P0-A).
+2.  ~~Tulis protokol dan kontrak lifecycle worker persistent.~~ DONE (P0-B + `persistent-worker-contract.md`).
+3.  ~~Implementasikan supervisi worker persistent berukuran-tetap.~~ DONE (P0-B).
+4.  ~~Tambah identitas worker, transisi state, dan metrik lifecycle.~~ DONE (P0-B).
+5.  ~~Implementasikan sampling RSS per-worker dan kebijakan memori soft/hard.~~ DONE (P0-C).
+6.  ~~Tambah test crash, drain, budget-restart, dan ambang-memori deterministik.~~ DONE (P1-A).
+7.  ~~Tambah smoke test Laravel dan WordPress nyata.~~ DONE (P0-D).
+8.  ~~Perluas bukti benchmark dan soak mode-rilis.~~ DONE (lab P1-B + arsip soak 60 mnt/6 jam).
+9.  ~~Kaji ulang scaling adaptif hanya setelah baseline pool-tetap stabil.~~ DONE (P2 opt-in).
 
-1.  Audit and label the current one-shot execution path accurately.
-2.  Write the persistent worker protocol and lifecycle contract.
-3.  Implement fixed-size persistent worker supervision.
-4.  Add worker identity, state transitions, and lifecycle metrics.
-5.  Implement per-worker RSS sampling and soft/hard memory policy.
-6.  Add deterministic crash, drain, restart-budget, and memory-threshold
-    tests.
-7.  Add real Laravel and WordPress smoke tests.
-8.  Expand soak and release-mode benchmark evidence.
-9.  Revisit adaptive scaling only after the fixed-pool baseline is
-    stable.
+## 9. Kesimpulan reviewer
 
-## 9. Reviewer conclusion
+PHPX punya arah produk yang koheren dan groundwork arsitektural yang
+berguna. Risiko engineering terpenting bukan pilihan Rust atau PHP;
+melainkan apakah runtime benar-benar mengimplementasikan dan membuktikan
+perilaku lifecycle worker, monitoring resource, recycling, kompatibilitas,
+dan recovery yang ingin ditawarkan produk.
 
-PHPX has a coherent product direction and useful architectural
-groundwork. The most important engineering risk is not the choice of
-Rust or PHP; it is whether the runtime actually implements and proves
-the worker lifecycle, resource monitoring, recycling, compatibility, and
-recovery behavior that the product intends to offer.
+Milestone berikut harus memprioritaskan **perilaku runtime terukur atas
+jumlah fitur**. (Catatan 2026-11-25: prioritas ini dipenuhi — P0-A…P2
+selesai dengan bukti; fokus kini: rekor RC, SLO formal, tren 24 jam.)
 
-The next milestone should prioritize **measurable runtime behavior over
-feature count**.
-
-> Build the control loop. Measure the resources. Inject failures. Prove
-> recovery. Then make the claims.
+> Bangun control loop. Ukur resource. Injeksi kegagalan. Buktikan
+> recovery. Baru buat klaim.

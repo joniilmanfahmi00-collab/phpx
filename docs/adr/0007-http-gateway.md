@@ -1,14 +1,14 @@
-## ADR-0007: HTTP gateway implementation
+## ADR-0007: Implementasi HTTP gateway
 
--   **Status:** Accepted
--   **Decision:** Use Hyper with Tokio for the initial HTTP gateway, and
-    Rustls for TLS.
--   **Context:** These components provide a modular Rust HTTP foundation
-    without requiring PHP to own the network listener.
--   **Consequences:**
-    -   HTTP/1.1 is mandatory for v0.1; HTTP/2 is a target subject to
-        integration testing.
-    -   HTTP/3 is out of scope for v0.1.
-    -   Static file serving, request limits, graceful shutdown, and PHP
-        front-controller dispatch are part of the gateway.
-    -   Reverse proxy and advanced edge features are deferred.
+-   **Status:** Diterima (Accepted)
+-   **Keputusan:** Gunakan Hyper bersama Tokio untuk HTTP gateway awal,
+    dan Rustls untuk TLS.
+-   **Konteks:** Komponen-komponen ini menyediakan fondasi HTTP Rust yang
+    modular tanpa mengharuskan PHP memegang network listener.
+-   **Konsekuensi:**
+    -   HTTP/1.1 wajib untuk v0.1; HTTP/2 adalah target yang tunduk pada
+        pengujian integrasi.
+    -   HTTP/3 di luar lingkup v0.1.
+    -   Penyajian file statis, batas request, graceful shutdown, dan
+        dispatch front-controller PHP adalah bagian dari gateway.
+    -   Reverse proxy dan fitur edge lanjutan ditunda.

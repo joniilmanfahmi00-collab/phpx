@@ -1,69 +1,69 @@
-# PHPX cache (M5 phase 3 + Redis follow-up)
+# Cache PHPX (M5 fase 3 + susulan Redis)
 
-Status: phase 3 DONE — bounded memory + filesystem + Redis, TTL, contract tests.
-App-native Redis via WordPress/Laravel REDIS_HOST tetap jalan langsung dari PHP, tanpa PHPX driver.
+Status: fase 3 SELESAI — memori + filesystem + Redis terbatas, TTL, uji kontrak.
+Redis app-native via REDIS_HOST WordPress/Laravel tetap jalan langsung dari PHP, tanpa driver PHPX.
 
-SPEC 7.3: PHP OPcache stays owned by PHP. This cache is application data
-(strings/bytes) only, never opcode. All three drivers are bounded and share
-one contract suite.
+SPEC 7.3: OPcache PHP tetap milik PHP. Cache ini hanya data aplikasi
+(string/byte), tidak pernah opcode. Ketiga driver terbatas dan berbagi
+satu suite kontrak.
 
-## Drivers
+## Driver
 
-- `memory`: HashMap + FIFO eviction, per-process, ephemeral.
-  Hits/misses counted in-process. Good for dev + tests.
-- `filesystem`: one file per key (`<key>.cache`, 8-byte BE expiry + value),
-  oldest-mtime eviction, survives restart. Good for single-node baseline.
-- `redis`: shared/networked driver (same contract suite + TTL-expiry + namespace
-  isolation pins). Server at `[cache] url` or `PHPX_REDIS_URL` env. Same
-  8-byte-BE-expiry envelope as filesystem. Eviction oldest-first via a sorted-set
-  index; bytes accounted in a counter key (lazy-expiry drift possible, same class
-  as filesystem mtime drift). Hits/misses are process-local counters. Keys are
-  namespaced (`phpx:cache:<namespace>:`; CLI uses `default`). Secrets: the URL
-  is never logged.
+- `memory`: HashMap + eviksi FIFO, per-proses, ephemeral.
+  Hit/miss dihitung in-process. Bagus untuk dev + pengujian.
+- `filesystem`: satu file per kunci (`<key>.cache`, 8-byte BE expiry + value),
+  eviksi oldest-mtime, tahan restart. Bagus untuk baseline satu-node.
+- `redis`: driver bersama/berjaringan (suite kontrak sama + pin TTL-expiry + isolasi
+  namespace). Server di `[cache] url` atau env `PHPX_REDIS_URL`. Envelope
+  8-byte-BE-expiry yang sama seperti filesystem. Eviksi oldest-first via indeks sorted-set;
+  byte dihitung di kunci counter (drift kedaluwarsa-lazy dimungkinkan, sekelas
+  drift mtime filesystem). Hit/miss adalah counter lokal-proses. Kunci di-namespace
+  (`phpx:cache:<namespace>:`; CLI memakai `default`). Secret: URL
+  tidak pernah di-log.
 
-## Semantics (SPEC 7.3)
+## Semantik (SPEC 7.3)
 
-- Bounded: key 1-256 chars `[A-Za-z0-9 . _ - :]`, value max 1MB,
-  entries max 100,000, bytes max 1GB. Full = error (backpressure, never unbounded).
-- TTL: `set --ttl-secs N`, `0` = no expiry, max 30d. Expired = miss + lazy delete.
-- Operations: `get` / `set` / `delete` / `clear` / `stats`.
-- Exactly-once NOT promised for callers; cache is best-effort + TTL.
-  App must tolerate miss (recompute) — same as OPcache miss.
+- Terbatas: kunci 1-256 char `[A-Za-z0-9 . _ - :]`, value maks 1MB,
+  entri maks 100.000, byte maks 1GB. Penuh = error (backpressure, tidak pernah tanpa batas).
+- TTL: `set --ttl-secs N`, `0` = tanpa kedaluwarsa, maks 30 hari. Kedaluwarsa = miss + hapus-lazy.
+- Operasi: `get` / `set` / `delete` / `clear` / `stats`.
+- Exactly-once TIDAK dijanjikan untuk pemanggil; cache bersifat best-effort + TTL.
+  App wajib toleran-miss (hitung-ulang) — sama seperti miss OPcache.
 
-## CLI (phase 3 real)
+## CLI (fase 3 nyata)
 
-- `phpx cache status [--json]` — entries, hits/misses, bounds.
-- `phpx cache get --key foo [--json]` — hit prints value, miss exit 0 + note.
+- `phpx cache status [--json]` — entri, hit/miss, batas.
+- `phpx cache get --key foo [--json]` — hit mencetak value, miss exit 0 + catatan.
 - `phpx cache set --key foo --value bar [--ttl-secs 60] [--json]`
-- `phpx cache delete --key foo [--json]` — miss on delete = exit 0 + note.
-- `phpx cache clear [--json]` — returns count removed.
-- Bad key/value = exit 2 with actionable message.
+- `phpx cache delete --key foo [--json]` — miss saat delete = exit 0 + catatan.
+- `phpx cache clear [--json]` — mengembalikan jumlah yang dihapus.
+- Kunci/value buruk = exit 2 dengan pesan actionable.
 
 ## Config
 
 ```toml
 [cache]
 driver = "memory" # memory | filesystem | redis
-max_memory = "128MB" # 1KB-1GB, parsed by parse_size
-dir = "./data/cache" # required when driver=filesystem
-url = "redis://127.0.0.1:6379" # required when driver=redis (or PHPX_REDIS_URL env)
+max_memory = "128MB" # 1KB-1GB, diurai oleh parse_size
+dir = "./data/cache" # wajib bila driver=filesystem
+url = "redis://127.0.0.1:6379" # wajib bila driver=redis (atau env PHPX_REDIS_URL)
 max_entries = 1000 # 1-100000
 ```
 
-Validation (`phpx-config`): unknown driver exits 2, filesystem without
-`dir` exits 2, redis without `url` (and without `PHPX_REDIS_URL`) exits 2,
-`max_memory` must parse 1KB-1GB, `max_entries` 1-100000.
+Validasi (`phpx-config`): driver tak dikenal exit 2, filesystem tanpa
+`dir` exit 2, redis tanpa `url` (dan tanpa `PHPX_REDIS_URL`) exit 2,
+`max_memory` wajib terurai 1KB-1GB, `max_entries` 1-100000.
 
-## Tests
+## Pengujian
 
-- `crates/phpx-cache/tests/contract.rs` (same suite vs all drivers):
-  set/get, TTL/delete/clear, survive-reopen (filesystem only), TTL expiry
-  (redis), namespace isolation (redis), rejects bad keys. Redis cases run
-  against live `PHPX_REDIS_URL` and SKIP loudly without it.
-- `cargo test -p phpx-cache` green (2 unit + 10 contract).
-- CLI: `cache status` exit 0, `--json` has `entries`.
+- `crates/phpx-cache/tests/contract.rs` (suite yang sama vs semua driver):
+  set/get, TTL/delete/clear, tahan-dibuka-ulang (hanya filesystem), kedaluwarsa TTL
+  (redis), isolasi namespace (redis), menolak kunci buruk. Kasus Redis berjalan
+  melawan `PHPX_REDIS_URL` live dan SKIP dengan lantang tanpanya.
+- `cargo test -p phpx-cache` hijau (2 unit + 10 kontrak).
+- CLI: `cache status` exit 0, `--json` punya `entries`.
 
-## Deferred (later M5)
+## Ditunda (M5 lanjutan)
 
-- Gateway-integrated cache middleware (needs runtime-process integration).
-- Cache warming / stampede protection.
+- Middleware cache terintegrasi gateway (butuh integrasi runtime-process).
+- Pemanasan cache / proteksi stampede.

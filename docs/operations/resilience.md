@@ -1,96 +1,96 @@
-# PHPX resilience + soak runbook (P1-A)
+# Runbook resiliensi + soak PHPX (P1-A)
 
-Repeatable failure-injection and recovery evidence. All suites below run in
-`cargo test --workspace` (no manual steps, no external services except the
-P0-D WordPress DB which is out of scope here).
+Bukti failure-injection dan recovery yang dapat diulang. Semua suite di bawah
+berjalan di `cargo test --workspace` (tanpa langkah manual, tanpa layanan
+eksternal kecuali DB WordPress P0-D yang di luar lingkup sini).
 
-## Failure-injection matrix (all automated)
+## Matriks failure-injection (semua otomatis)
 
-| Plan item | Test | What is proven |
+| Item rencana | Test | Yang dibuktikan |
 |---|---|---|
-| Crash while processing | `p1a: crash via crash.php` (covered pre-P1-A in `m1_execute`, `m4_compat`) + `p0b: crash_restarts_worker_with_new_incarnation` | Gateway survives; supervised worker restarts with a new incarnation + PID |
-| Crash while idle | `p1a_resilience::crash_while_idle_restarts_on_next_request` (external `kill -9` / `taskkill` of the Ready worker's PID) | Next request detects the dead worker, restarts it, serves 500-then-200 |
-| Request timeout | `m1_execute::execution_timeout_kills_slow_worker`, `p0b: timeout_kills_and_restarts_hung_worker` | Hung worker killed, 504, replacement serves |
-| Startup failure | `p0b: startup_failure_reports_diagnostic` | Pool refuses to start with 0/N ready + reasons (no half-dead capacity) |
-| Restart budget exhaustion | `p0b: restart_budget_exhaustion_marks_failed_with_reason` | Worker goes Failed with a diagnostic; executes surface it (no infinite loop) |
-| Restart-loop protection | `p1a_resilience::crash_loop_opens_circuit_then_admits_again` | Consecutive crashes open the circuit (fast 503); after backoff the pool admits again |
-| Graceful shutdown, in-flight | `p1a: drain_with_in_flight_{persistent,oneshot}_completes_then_stops` | In-flight finishes 200, new work fast-rejected, workers end Stopped, drain returns true within the deadline |
-| Graceful reload story | `p1a: reload_is_drain_then_rebuild` | No live reload (documented): drain, rebuild, serve — pinned as the contract |
-| Queue saturation / overload | `m7_resilience`, `m1_pool`, `p0b: queue_bound_is_enforced` | Bounded queue + 503 + metrics + recovery |
-| Memory-threshold recycling | `p0c` soft/hard tests (controlled 32–64MB hog, `mem.php`) | Soft recycles gracefully, hard terminates protectively, triggers metered |
-| State leakage | `p1a: persistent_worker_state_leaks_are_visible...` (`leak.php`) | Persistent reuse shows the documented `$GLOBALS` leak; one-shot stays clean |
-| Unknown routes / 404s | `p0d_laravel`, `p0d_wordpress` | Framework 404 bodies served as 200 (CLI-SAPI limit, documented) |
+| Crash saat memproses | `p1a: crash via crash.php` (tercakup pra-P1-A di `m1_execute`, `m4_compat`) + `p0b: crash_restarts_worker_with_new_incarnation` | Gateway selamat; worker terawasi restart dengan inkarnasi + PID baru |
+| Crash saat idle | `p1a_resilience::crash_while_idle_restarts_on_next_request` (`kill -9` / `taskkill` eksternal pada PID worker Ready) | Request berikut mendeteksi worker mati, me-restart-nya, melayani 500-lalu-200 |
+| Timeout request | `m1_execute::execution_timeout_kills_slow_worker`, `p0b: timeout_kills_and_restarts_hung_worker` | Worker macet di-kill, 504, pengganti melayani |
+| Gagal startup | `p0b: startup_failure_reports_diagnostic` | Pool menolak start dengan 0/N ready + alasan (tanpa kapasitas setengah mati) |
+| Habis budget restart | `p0b: restart_budget_exhaustion_marks_failed_with_reason` | Worker menjadi Failed dengan diagnostik; eksekusi menyampaikannya (tanpa loop tak berujung) |
+| Proteksi restart-loop | `p1a_resilience::crash_loop_opens_circuit_then_admits_again` | Crash beruntun membuka sirkuit (503 cepat); setelah backoff pool menerima lagi |
+| Shutdown graceful, in-flight | `p1a: drain_with_in_flight_{persistent,oneshot}_completes_then_stops` | In-flight selesai 200, kerja baru ditolak cepat, worker berakhir Stopped, drain true dalam deadline |
+| Cerita reload graceful | `p1a: reload_is_drain_then_rebuild` | Tanpa live reload (terdokumentasi): drain, rebuild, serve — dipin sebagai kontrak |
+| Saturasi antre / overload | `m7_resilience`, `m1_pool`, `p0b: queue_bound_is_enforced` | Antre terbatas + 503 + metrics + recovery |
+| Recycle ambang memori | Test soft/hard `p0c` (hog 32–64MB terkendali, `mem.php`) | Soft recycle graceful, hard terminate protektif, trigger terukur |
+| Kebocoran state | `p1a: persistent_worker_state_leaks_are_visible...` (`leak.php`) | Reuse persistent menunjukkan `$GLOBALS` leak yang didokumentasikan; one-shot tetap bersih |
+| Rute tak dikenal / 404 | `p0d_laravel`, `p0d_wordpress` | Body 404 framework dilayani sebagai 200 (batas CLI-SAPI, terdokumentasi) |
 
-## Recovery timeline (P1-A measurement)
+## Timeline recovery (pengukuran P1-A)
 
-Recorded per worker on every unplanned restart (`WorkerSnapshot::last_recovery`,
+Dicatat per worker pada setiap restart tak direncanakan
+(`WorkerSnapshot::last_recovery`,
 `phpx_worker_last_recovery_duration_seconds{worker_id}`):
 
-- `detected_at` — failure detection (exchange EOF/timeout, idle-crash discovery, hard-limit sample).
-- `restart_started_at` — restart initiation (kill issued for the old process).
-- `ready_at` — replacement ready (fresh handshake inside `startup_timeout`).
+- `detected_at` — deteksi kegagalan (EOF/timeout exchange, temuan crash-idle, sampel hard-limit).
+- `restart_started_at` — inisiasi restart (kill untuk proses lama).
+- `ready_at` — pengganti ready (handshake fresh dalam `startup_timeout`).
 
-Pinned by `p1a: recovery_timeline_reports_detection_to_ready`: legs are
-reported separately and must satisfy `total == detection→restart +
-restart→ready`, with total inside the startup budget. Time-to-first-success
-is proven by the request after recovery returning 200.
+Dipin oleh `p1a: recovery_timeline_reports_detection_to_ready`: tiap leg
+dilaporkan terpisah dan harus memenuhi `total == detection→restart +
+restart→ready`, dengan total di dalam budget startup. Time-to-first-success
+dibuktikan oleh request setelah recovery yang kembali 200.
 
-## Acceptance thresholds (RC-track, enforced)
+## Ambang penerimaan (RC-track, ditegakkan)
 
-Single-node dev scope; generous caps so they catch regressions, not machine
-noise. Recovery budgets derive from the pool config in the tests
-(`startup_timeout` 15s, `execution_timeout` 10s).
+Lingkup dev satu-node; cap longgar agar menangkap regresi, bukan noise mesin.
+Budget recovery berasal dari konfig pool di test (`startup_timeout` 15 dtk,
+`execution_timeout` 10 dtk).
 
-| Signal | Threshold | Enforced by |
+| Sinyal | Ambang | Ditegakkan oleh |
 |---|---|---|
-| Recovery detection -> restart initiation | <= 5_000 ms | `p1a_resilience::recovery_timeline_reports_detection_to_ready` |
-| Recovery restart -> replacement ready | <= 17_000 ms (15s startup + 2s slack) | same test |
-| Recovery total (detection -> ready) | <= 20_000 ms (15s + 5s slack) | same test |
-| Kill -> failing 500 -> first 200 on replacement | <= 30_000 ms (total + one 10s execution budget) | `p1a_resilience::time_to_first_success_after_idle_crash_within_budget` |
-| Guardian soft recycle: hog -> recycle -> next 200 | <= 30_000 ms (10s exec + 15s startup + 5s slack) | `persistent::soft_limit_recycles_gracefully...` |
-| Crash-loop circuit fail-fast | < 4_000 ms | `p1a_resilience::crash_loop_...` (existing) |
-| Drain reject of new work | < 4_000 ms | `p1a_resilience::drain_with_in_flight_...` (existing) |
-| Short soak conservation (120 req, crash every 10th) | completed + failed == total, restarts == 12, all Ready, no Failed | `p1a_resilience::short_soak_...` (existing) |
-| Bench-lab smoke (CI) | failures == 0 | `bench-lab.sh --max-failures 0` (rps/p95 stay manual RC inputs, never cross-machine SLA) |
+| Recovery detection -> inisiasi restart | <= 5_000 ms | `p1a_resilience::recovery_timeline_reports_detection_to_ready` |
+| Recovery restart -> pengganti ready | <= 17_000 ms (15 dtk startup + 2 dtk slack) | test yang sama |
+| Recovery total (detection -> ready) | <= 20_000 ms (15 dtk + 5 dtk slack) | test yang sama |
+| Kill -> 500 gagal -> 200 pertama di pengganti | <= 30_000 ms (total + satu budget eksekusi 10 dtk) | `p1a_resilience::time_to_first_success_after_idle_crash_within_budget` |
+| Recycle soft guardian: hog -> recycle -> 200 berikut | <= 30_000 ms (10 dtk exec + 15 dtk startup + 5 dtk slack) | `persistent::soft_limit_recycles_gracefully...` |
+| Fail-fast sirkuit crash-loop | < 4_000 ms | `p1a_resilience::crash_loop_...` (eksisting) |
+| Penolakan kerja baru saat drain | < 4_000 ms | `p1a_resilience::drain_with_in_flight_...` (eksisting) |
+| Konservasi short soak (120 req, crash tiap ke-10) | completed + failed == total, restarts == 12, semua Ready, tanpa Failed | `p1a_resilience::short_soak_...` (eksisting) |
+| Smoke bench-lab (CI) | failures == 0 | `bench-lab.sh --max-failures 0` (rps/p95 tetap input RC manual, bukan SLA lintas mesin) |
 
-Long-soak RSS slope stays observed-only for now (60-min archive: +3.6
-KB/min, flat band 324 KB): needs 6h/24h repeats before a slope cap can be set
-without flaking.
+Slope RSS long-soak tetap observasi saja untuk saat ini (arsip 60 menit:
++3,6 KB/menit; run 6 jam 2026-11-25: -0,86 KB/menit, 73.600/73.600 tanpa
+gagal): tren 24 jam masih diperlukan sebelum cap slope formal ditetapkan.
 
-## Adaptive autoscale (P2, experimental opt-in)
+## Autoscale adaptif (P2, eksperimental opt-in)
 
-Disabled by default (`adaptive_enabled=false` keeps the fixed pool above
-unchanged). When enabled, the pool starts at `min_workers`, grows on
-sustained pressure up to `workers`, and shrinks back when idle.
+Nonaktif default (`adaptive_enabled=false` menjaga pool tetap di atas tidak
+berubah). Bila aktif, pool mulai di `min_workers`, tumbuh pada tekanan
+berkelanjutan hingga `workers`, dan menyusut kembali saat idle.
 
-- Signals: queued depth + active count vs spawned capacity (saturation =
-  every spawned worker busy with queue behind it); guardian memory pressure
-  (a recent soft/hard hit); crash-loop circuit state; drain state.
-- Safeguards: ceiling (`workers`), floor (`min_workers`, also the initial
-  size), one worker per evaluation interval, cooldown between actions,
-  scale-up needs `adaptive_scale_up_queue_depth` queued behind a saturated
-  pool, scale-down needs `adaptive_scale_down_idle_intervals` straight
-  all-idle evaluations, no scale-up under memory pressure or open circuit,
-  never while draining, highest-id-first retirement (low ids stay stable).
-- Law: pure function `adaptive_decide` (unit-tested matrix: saturate/up,
+- Sinyal: kedalaman antre + jumlah aktif vs kapasitas terspawn (saturasi =
+  setiap worker terspawn sibuk dengan antrean di belakang); tekanan memori
+  guardian (hit soft/hard terakhir); state sirkuit crash-loop; state drain.
+- Pengaman: plafon (`workers`), lantai (`min_workers`, juga ukuran awal),
+  satu worker per interval evaluasi, cooldown antar aksi, scale-up butuh
+  `adaptive_scale_up_queue_depth` antrean di belakang pool jenuh, scale-down
+  butuh `adaptive_scale_down_idle_intervals` evaluasi idle beruntun, tanpa
+  scale-up di bawah tekanan memori atau sirkuit terbuka, tidak pernah saat
+  draining, pensiun highest-id-first (id rendah tetap stabil).
+- Hukum: fungsi murni `adaptive_decide` (matriks unit-test: saturate/up,
   hysteresis/down, blocked-hold, memory-blocks-up-only, heal-to-range).
-- Observability: `phpx_pool_workers_current`,
+- Observabilitas: `phpx_pool_workers_current`,
   `phpx_pool_adaptive_enabled{0,1}`,
-  `phpx_pool_adaptive_scale_events_total{direction=up|down}`; spares show as
-  `stopped` in per-worker series; `workers status` reports the tuning.
-- Evidence: `p2_adaptive` (floor start, pressure -> ceiling, idle -> floor,
-  exact event counts; fixed pool unchanged under the same load).
+  `phpx_pool_adaptive_scale_events_total{direction=up|down}`; spare tampil
+  sebagai `stopped` di seri per-worker; `workers status` melaporkan tuning.
+- Bukti: `p2_adaptive` (start lantai, tekanan -> plafon, idle -> lantai,
+  jumlah event persis; pool tetap tidak berubah di bawah beban sama).
 
 ## Soak
 
-- CI gate (repeatable): `p1a: short_soak_mixed_workload_stays_healthy`
-  (120 requests, fast + crash every 10th, 2 workers): conservation
-  (`completed + failed == total`), restart accounting matches injected
-  crashes, all workers Ready at end, no Failed.
-- Manual long soak: `scripts/soak.sh [--execution-mode one-shot|persistent]`
-  (Linux) / `scripts/soak-windows.ps1 [-Mode ...]` (Windows), plus
-  `scripts/soak-long.sh` (60-min RSS CSV). Archive per run: raw logs +
-  environment metadata (OS, PHP `--version`, rustc, UTC date) + config +
-  `/metrics` snapshot + result summary; keep raw datasets 30 days
-  (`docs/operations/baseline.md` convention). The gateway RSS should stay
-  flat; worker RSS follows the workload and the guardian policy.
+- Gerbang CI (dapat diulang): `p1a: short_soak_mixed_workload_stays_healthy`
+  (120 request, cepat + crash tiap ke-10, 2 worker): konservasi
+  (`completed + failed == total`), akuntansi restart cocok dengan crash
+  injeksi, semua worker Ready di akhir, tanpa Failed.
+- Soak panjang manual: `scripts/soak-long.sh` (Linux/WSL) /
+  `scripts/soak-long-windows.ps1` (Windows), plus arsip per run: log mentah +
+  metadata lingkungan (OS, PHP `--version`, rustc, tanggal UTC) + konfig +
+  snapshot `/metrics` + ringkasan hasil; simpan dataset mentah 30 hari
+  (konvensi `docs/operations/baseline.md`). RSS gateway harus tetap flat;
+  RSS worker mengikuti beban dan kebijakan guardian. Rekaman run: `soak.md`.

@@ -1,34 +1,35 @@
 # Architecture Decision Records
 
-Accepted architecture decisions for PHPX v0.1 (ADR-0001 to ADR-0013),
-plus one proposed extension:
+Keputusan arsitektur yang Diterima untuk PHPX v0.1 (ADR-0001 hingga
+ADR-0013), ditambah satu usulan ekstensi:
 
--   [ADR-0001: Product identity and
-    scope](0001-product-identity-and-scope.md)
--   [ADR-0002: Rust is the platform control
-    plane](0002-rust-control-plane.md)
--   [ADR-0003: Hybrid PHP runtime
-    architecture](0003-hybrid-php-runtime.md)
--   [ADR-0004: Strict PHP application
-    compatibility](0004-strict-compatibility.md)
--   [ADR-0005: Docker and native Linux
-    deployment](0005-docker-and-native-linux.md)
--   [ADR-0006: Tokio orchestration and blocking
-    execution](0006-tokio-and-blocking-execution.md)
--   [ADR-0007: HTTP gateway implementation](0007-http-gateway.md)
--   [ADR-0008: TOML configuration](0008-toml-configuration.md)
--   [ADR-0009: Queue durability and adapters](0009-queue-durability.md)
--   [ADR-0010: Built-in observability](0010-observability.md)
--   [ADR-0011: Security and resource
-    isolation](0011-security-and-isolation.md)
--   [ADR-0012: Modular Rust workspace](0012-modular-workspace.md)
--   [ADR-0013: Release and compatibility policy](0013-release-policy.md)
--   [ADR-0014: Worker lifecycle, resource management and adaptive
-    recycling](0014-worker-lifecycle-resource-management.md) — Status:
-    Proposed. Extends SPEC Section 5 and Section 8 with lifecycle,
-    soft/hard memory thresholds, and deferred adaptive scaling. Main
-    body in Sundanese with English abstract header.
+-   [ADR-0001: Identitas dan lingkup
+    produk](0001-product-identity-and-scope.md)
+-   [ADR-0002: Rust adalah bidang kendali
+    platform](0002-rust-control-plane.md)
+-   [ADR-0003: Arsitektur runtime PHP
+    hibrida](0003-hybrid-php-runtime.md)
+-   [ADR-0004: Kompatibilitas aplikasi PHP yang
+    ketat](0004-strict-compatibility.md)
+-   [ADR-0005: Deployment Docker dan Linux
+    native](0005-docker-and-native-linux.md)
+-   [ADR-0006: Orkestrasi Tokio dan eksekusi
+    blocking](0006-tokio-and-blocking-execution.md)
+-   [ADR-0007: Implementasi HTTP gateway](0007-http-gateway.md)
+-   [ADR-0008: Konfigurasi TOML](0008-toml-configuration.md)
+-   [ADR-0009: Durabilitas antrean dan adapter](0009-queue-durability.md)
+-   [ADR-0010: Observabilitas bawaan](0010-observability.md)
+-   [ADR-0011: Keamanan dan isolasi sumber
+    daya](0011-security-and-isolation.md)
+-   [ADR-0012: Workspace Rust modular](0012-modular-workspace.md)
+-   [ADR-0013: Kebijakan rilis dan kompatibilitas](0013-release-policy.md)
+-   [ADR-0014: Siklus hidup worker, manajemen sumber daya, dan
+    recycling adaptif](0014-worker-lifecycle-resource-management.md) —
+    Status: Diusulkan (Proposed). Memperluas SPEC Bagian 5 dan Bagian 8
+    dengan siklus hidup, ambang memori soft/hard, dan penskalaan adaptif
+    yang ditunda. Isi utama dalam bahasa Indonesia (diterjemahkan dari
+    bahasa Sunda) dengan kepala abstrak bahasa Inggris.
 
-See [all decisions in one document](../ARCHITECTURE_DECISIONS.md) for
-context and consequences. ADR-0014 summary is included there as
-Proposed, not yet part of the Accepted baseline.
+Lihat [semua keputusan dalam satu dokumen](../ARCHITECTURE_DECISIONS.md)
+untuk konteks dan konsekuensi. Ringkasan ADR-0014 disertakan di sana
+sebagai Diusulkan (Proposed), belum menjadi bagian dari basis Diterima.

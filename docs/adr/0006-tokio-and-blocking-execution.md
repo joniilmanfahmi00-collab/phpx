@@ -1,17 +1,19 @@
-## ADR-0006: Tokio orchestration, isolated blocking execution
+## ADR-0006: Orkestrasi Tokio, eksekusi blocking yang terisolasi
 
--   **Status:** Accepted
--   **Decision:** Tokio is used for asynchronous platform I/O and
-    orchestration. PHP execution and other blocking operations run
-    outside Tokio worker threads.
--   **Context:** PHP execution is not an async Tokio future and can
-    block for arbitrary durations.
--   **Consequences:**
-    -   Process workers communicate over bounded IPC channels.
-    -   Embedded PHP, if used, runs in dedicated controlled threads or
-        execution domains with serialized access according to the PHP
-        build and SAPI constraints.
-    -   Backpressure and bounded queues are mandatory.
-    -   Cancellation of an HTTP request does not imply unsafe
-        interruption of an executing PHP interpreter; timeout handling
-        is backend-specific and documented.
+-   **Status:** Diterima (Accepted)
+-   **Keputusan:** Tokio digunakan untuk I/O platform yang asinkron dan
+    orkestrasi. Eksekusi PHP dan operasi blocking lainnya berjalan di
+    luar thread worker Tokio.
+-   **Konteks:** Eksekusi PHP bukan async Tokio future dan dapat
+    memblokir selama durasi sembarang.
+-   **Konsekuensi:**
+    -   Worker proses berkomunikasi melalui kanal IPC yang berbatas
+        (bounded).
+    -   PHP embedded, bila digunakan, berjalan dalam thread khusus yang
+        terkendali atau domain eksekusi dengan akses terserialisasi
+        sesuai batasan build PHP dan SAPI.
+    -   Backpressure dan antrean berbatas bersifat wajib.
+    -   Pembatalan suatu request HTTP tidak berarti penghentian paksa
+        yang tidak aman terhadap interpreter PHP yang sedang
+        dieksekusi; penanganan timeout bersifat khusus backend dan
+        didokumentasikan.

@@ -1,15 +1,15 @@
-## ADR-0010: Observability is built in
+## ADR-0010: Observabilitas dibangun di dalam platform
 
--   **Status:** Accepted
--   **Decision:** Structured logs, request correlation, metrics, and
-    tracing are platform capabilities, not optional afterthoughts.
--   **Context:** A runtime platform must be diagnosable under real
-    production load.
--   **Consequences:**
-    -   Use the Rust `tracing` ecosystem.
-    -   Expose Prometheus-compatible metrics.
-    -   Add OpenTelemetry integration incrementally.
-    -   Never log secrets, authorization headers, or sensitive request
-        payloads by default.
-    -   Runtime and worker metrics must be attributable to an
-        application and worker.
+-   **Status:** Diterima (Accepted)
+-   **Keputusan:** Log terstruktur, korelasi request, metrik, dan tracing
+    adalah kapabilitas platform, bukan tambahan opsional.
+-   **Konteks:** Sebuah platform runtime harus dapat didiagnosis di bawah
+    beban produksi yang nyata.
+-   **Konsekuensi:**
+    -   Gunakan ekosistem `tracing` Rust.
+    -   Ekspos metrik yang kompatibel dengan Prometheus.
+    -   Tambahkan integrasi OpenTelemetry secara bertahap.
+    -   Jangan pernah mencatat secret, header otorisasi, atau payload
+        request yang sensitif secara default.
+    -   Metrik runtime dan worker harus dapat diatribusikan ke suatu
+        aplikasi dan worker.

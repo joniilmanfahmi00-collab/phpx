@@ -1,44 +1,44 @@
-# PHPX security review + threat model (M7 Pase 1)
+# Tinjauan keamanan + model ancaman PHPX (M7 Fase 1)
 
-**Status:** RC gate, v0.1 developer preview. App code + PHP extensions are trusted (SPEC 10). No multi-tenant isolation claim.
+**Status:** gerbang RC, pratinjau developer v0.1. Kode aplikasi + ekstensi PHP dianggap tepercaya (SPEC 10). Tanpa klaim isolasi multi-tenant.
 
-## Trust boundaries
+## Batas kepercayaan
 
-| # | Boundary | Trust | Mitigation (verified) |
+| # | Batas | Kepercayaan | Mitigasi (terverifikasi) |
 |---|----------|-------|-----------------------|
-| 1 | Network -> gateway | Untrusted | Bounded body (`request_body_limit`), bounded pool + queue (503 + `Retry-After: 1`), timeouts, TLS via Rustls opsional |
-| 2 | URI path -> FS | Untrusted | Pre-FS reject (`..`, `\\`, NUL, `%2e/%2f/%5c/%00` -> 400) + canonical `starts_with` docroot check (escape -> 403). Never serve `.php` raw. |
-| 3 | Headers/logs | Untrusted secrets | Access logs only `request_id/method/path/status/duration_ms`. `is_sensitive_header()` + `redacted_header_value()` guarantee: `authorization/cookie/*token*/*secret*/*password*/*api-key*/*auth*` -> `[redacted]`. Full values only go to PHP env, never logs. |
-| 4 | PHP worker | Trusted app, untrusted input | One-shot `php <entry>` per request, no cross-request globals. Crash (`exit != 0`) -> 500, gateway stays up. Restart budget + circuit breaker. |
-| 5 | Config/files | Operator trusted | `phpx serve --config` validated; TLS PEM paths, docroot/entrypoint existence checked. No secrets in `phpx doctor`/`metrics` output. |
-| 6 | Container/host | Operator responsibility | Docker `USER phpx (10001)`, `HEALTHCHECK /healthz`, systemd `User=phpx + NoNewPrivileges + ProtectSystem=strict`. cgroup CPU/memory limits via systemd/Docker (see below). |
+| 1 | Jaringan -> gateway | Tidak tepercaya | Body terbatas (`request_body_limit`), pool + antre terbatas (503 + `Retry-After: 1`), timeout, TLS via Rustls opsional |
+| 2 | Path URI -> FS | Tidak tepercaya | Tolak pra-FS (`..`, `\\`, NUL, `%2e/%2f/%5c/%00` -> 400) + cek kanonis `starts_with` docroot (escape -> 403). Tidak pernah sajikan `.php` mentah. |
+| 3 | Header/log | Secret tidak tepercaya | Access log hanya `request_id/method/path/status/duration_ms`. `is_sensitive_header()` + `redacted_header_value()` menjamin: `authorization/cookie/*token*/*secret*/*password*/*api-key*/*auth*` -> `[redacted]`. Nilai penuh hanya masuk ke env PHP, tidak pernah ke log. |
+| 4 | Worker PHP | App tepercaya, input tidak tepercaya | One-shot `php <entry>` per request, tanpa global lintas-request. Crash (`exit != 0`) -> 500, gateway tetap menyala. Anggaran restart + circuit breaker. |
+| 5 | Config/file | Operator tepercaya | `phpx serve --config` tervalidasi; path PEM TLS, keberadaan docroot/entrypoint dicek. Tanpa secret di output `phpx doctor`/`metrics`. |
+| 6 | Container/host | Tanggung jawab operator | Docker `USER phpx (10001)`, `HEALTHCHECK /healthz`, systemd `User=phpx + NoNewPrivileges + ProtectSystem=strict`. Batas CPU/memori cgroup via systemd/Docker (lihat bawah). |
 
-## Non-root verification (M7)
+## Verifikasi non-root (M7)
 
-- Static: `m7_dockerfile_runs_non_root` asserts `USER phpx` + `HEALTHCHECK` + uid `10001`.
-- Runtime: image runs as `phpx`; systemd example runs as `User=phpx`.
-- Operator check: `docker run --rm phpx:0.1.0-dev whoami` must print `phpx`, not `root`.
+- Statis: `m7_dockerfile_runs_non_root` menegaskan `USER phpx` + `HEALTHCHECK` + uid `10001`.
+- Runtime: image berjalan sebagai `phpx`; contoh systemd berjalan sebagai `User=phpx`.
+- Cek operator: `docker run --rm phpx:0.1.0-dev whoami` wajib mencetak `phpx`, bukan `root`.
 
-## cgroup / container limits (operator)
+## Batas cgroup / container (operator)
 
-M7 does not claim auto-detection of cgroup limits; it stays bounded and observable so your orchestrator can enforce them:
+M7 tidak mengklaim deteksi-otomatis batas cgroup; ia tetap terbatas dan teramati agar orchestrator Anda bisa menegakkannya:
 
 ```bash
-# Docker: 2 CPU + 1GiB, gateway 503s when saturated instead of OOM spiral
+# Docker: 2 CPU + 1GiB, gateway 503 saat jenuh alih-alih spiral OOM
 docker run --rm -p 8080:8080 --cpus=2 --memory=1g phpx:0.1.0-dev
 
-# systemd: see packaging/systemd/phpx.service (MemoryMax=, CPUQuota= examples in upgrade-rollback.md)
+# systemd: lihat packaging/systemd/phpx.service (contoh MemoryMax=/CPUQuota= di upgrade-rollback.md)
 ```
 
-Saturation signal: `/metrics` (`rejected_overload`, `circuit_breaks`, `waiting`) + access logs `status=503`.
+Sinyal saturasi: `/metrics` (`rejected_overload`, `circuit_breaks`, `waiting`) + access log `status=503`.
 
-## Secret handling rules (M7 gate)
+## Aturan penanganan secret (gerbang M7)
 
-1. Never log header values; only method/path/status/duration + IDs.
-2. New code that must display a header must call `redacted_header_value(name, value)`.
-3. `traceparent` (W3C) is passthrough for OTel (no PII); content is IDs, safe to log as ID.
-4. Report template: impact, affected boundary above, repro (raw socket vs reqwest), fix + regression test name.
+1. Jangan pernah me-log nilai header; hanya method/path/status/durasi + ID.
+2. Kode baru yang wajib menampilkan header wajib memanggil `redacted_header_value(name, value)`.
+3. `traceparent` (W3C) adalah passthrough untuk OTel (bukan PII); isinya ID, aman di-log sebagai ID.
+4. Templat laporan: dampak, batas terdampak di atas, repro (raw socket vs reqwest), perbaiki + nama uji regresi.
 
-## Known non-goals (RC explicit)
+## Non-tujuan yang diketahui (RC eksplisit)
 
-- No WAF/CDN parity, no sandbox escape claim for malicious extensions, no encrypted queue at rest (SQLite file perms are operator responsibility, see backup-recovery.md).
+- Tanpa paritas WAF/CDN, tanpa klaim sandbox-escape untuk ekstensi berbahaya, tanpa enkripsi queue saat-rest (perm file SQLite adalah tanggung jawab operator, lihat backup-recovery.md).

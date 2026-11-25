@@ -1,76 +1,82 @@
-# PHPX compatibility matrix (M4 + P0-D)
+# Matriks kompatibilitas PHPX (M4 + P0-D + P2)
 
-Developer preview v0.1. Scope: Process Runtime one-shot `php <entry>` per request
-+ P0-D real-application smoke (Laravel 12, gateway one-shot).
-`Failed` = terminal for that request attempt with diagnostic reason + restart-budget
-accounting; `Stopped` = drained pool, no new work (SPEC 5.1 + ADR-0014 alignment).
-Crash recovery = next request gets a fresh process; no cross-request state by construction.
-The server under test is always PHPX itself (`phpx serve` / `spawn_test_server`).
-Apache/nginx/php-fpm/Laragon/WP Studio are never the server under test.
+Developer preview v0.1. Lingkup: Process Runtime one-shot (`php <entry>` per
+request) + persistent supervised + embedded single-flight (opt-in) + smoke
+app asli P0-D (Laravel 12, WordPress 7.1 + WooCommerce 11.3, gateway process).
+`Failed` = terminal untuk percobaan request itu dengan alasan diagnostik +
+akuntansi restart-budget; `Stopped` = pool terdrain, tanpa kerja baru
+(penyelarasan SPEC 5.1 + ADR-0014).
+Crash recovery = request berikut mendapat proses fresh; tanpa state
+lintas-request secara konstruksi (one-shot) atau via resync SAPI (persistent).
+Server yang diuji selalu PHPX sendiri (`phpx serve` / `spawn_test_server`).
+Apache/nginx/php-fpm/Laragon/WP Studio tidak pernah menjadi server yang diuji.
 
-## Real applications (P0-D, served via `phpx serve` — never Apache)
+## Aplikasi asli (P0-D, dilayani via `phpx serve` — bukan Apache)
 
-| App (upstream, unmodified source) | Provisioning | Evidence | Scope + limits |
+| App (upstream, sumber tak diubah) | Provisioning | Bukti | Lingkup + batas |
 |---|---|---|---|
-| Laravel 12 (`laravel/laravel:^12.0`, sqlite, migrated) | `scripts/setup-laravel-smoke.sh` / `.ps1`, or auto by test (needs `composer`); override dir with `PHPX_LARAVEL_DIR` | `p0d_laravel` (5/5): welcome + no-failure-markers; 404 body; JSON 405 (`Accept: application/json`); sessions persist server-side (sqlite rows +1/request); multipart POST parsed by the SAPI shim (route still 405 as designed, no crash, 837KB debug page streams fine) | Smoke + integration (routing, error JSON, sessions, multipart parse). PHP-set status NOT propagated (404/405 arrive as 200). Set-Cookie swallowed by CLI SAPI (session id not observable on wire) |
-| WordPress 7.1 (`wordpress.org/latest.zip`, wp-cli install, MySQL 8.4) + WooCommerce 11.3 (real upstream plugin; scripted product `Smoke Pixel` 25) | `scripts/mysql-smoke.sh start` + `scripts/setup-wordpress-smoke.sh` (`.ps1` on Windows; CI: mariadb service + wp-cli); override dir with `PHPX_WORDPRESS_DIR`; install URL must be `http://127.0.0.1:18312` (fixed test gateway port, `PHPX_WP_URL`); app password in `.phpx-app-password` (deployment artifact, gitignored) | `p0d_wordpress` (13/13: WP front/search/pretty/login/REST/comments/media above, plus shop loop + product pretty URL + add-to-cart/cart/checkout redirect-swallow docs + `wc/v3/products` catalog JSON with app-password auth, unauth `woocommerce_rest_cannot_view`) | Smoke + integration (routing, query, JSON, form POST, cookies-in, auth, DB writes). PHP-set status/Location NOT propagated; `?p=N`, `?add-to-cart`, empty-checkout hits redirect-swallow (empty/front 200s). Upload raw bytes blocked: `php://input` empty under CLI SAPI (pinned as JSON error codes); multipart/form-data populates `$_POST`/`$_FILES` (tmp files, `move_uploaded_file()` stays false — read `tmp_name` or `rename()`). `$_POST` urlencoded + multipart + `PHP_AUTH_*`/`HTTP_AUTHORIZATION` + `REMOTE_ADDR`/`SERVER_NAME`/`SERVER_PORT` now emulated (see sapi-audit.md) |
+| Laravel 12 (`laravel/laravel:^12.0`, sqlite, migrated) | `scripts/setup-laravel-smoke.sh` / `.ps1`, atau otomatis oleh test (butuh `composer`); override dir dengan `PHPX_LARAVEL_DIR` | `p0d_laravel` (5/5): welcome + tanpa penanda gagal; body 404; JSON 405 (`Accept: application/json`); session persist sisi-server (baris sqlite +1/request); multipart POST diparsing shim SAPI (rute tetap 405 sesuai desain, tanpa crash) | Smoke + integrasi (routing, error JSON, session, parse multipart). Status set-PHP TIDAK dipropagasi (404/405 tiba sebagai 200). Set-Cookie ditelan CLI SAPI (id session tak teramati di wire) |
+| WordPress 7.1 (`wordpress.org/latest.zip`, install wp-cli, MySQL 8.4) + WooCommerce 11.3 (plugin upstream asli; produk skrip `Smoke Pixel` 25) | `scripts/mysql-smoke.sh start` + `scripts/setup-wordpress-smoke.sh` (`.ps1` di Windows; CI: service mariadb + wp-cli); override dir dengan `PHPX_WORDPRESS_DIR`; URL install harus `http://127.0.0.1:18312` (port gateway test tetap, `PHPX_WP_URL`); app password di `.phpx-app-password` (artefak deployment, di-gitignore) | `p0d_wordpress` (13/13: front/search/pretty/login/REST/comments/media WP di atas, plus loop toko + URL pretty produk + dok redirect-swallow add-to-cart/cart/checkout + katalog JSON `wc/v3/products` dengan auth app-password, `woocommerce_rest_cannot_view` tanpa auth) | Smoke + integrasi (routing, query, JSON, form POST, cookies-masuk, auth, tulis DB). Status/Location set-PHP TIDAK dipropagasi; hit `?p=N`, `?add-to-cart`, checkout-kosong kena redirect-swallow (200 depan/kosong). Byte mentah upload diblokir: `php://input` kosong di CLI SAPI (dipin sebagai kode error JSON); multipart/form-data mengisi `$_POST`/`$_FILES` (file tmp, `move_uploaded_file()` tetap false — baca `tmp_name` atau `rename()`). `$_POST` urlencoded + multipart + `PHP_AUTH_*`/`HTTP_AUTHORIZATION` + `REMOTE_ADDR`/`SERVER_NAME`/`SERVER_PORT` kini diemulasi (lihat sapi-audit.md) |
 
-Verified 2026-11-22: Laravel Framework 12.73.0 (PHP 8.3.30, Windows dev) +
-WordPress 7.1.5 (PHP 8.3.30 + MySQL 8.4.3, Windows dev).
-Record the local versions after each run; the tests accept any 12.x / 7.x.
+Terverifikasi 2026-11-22: Laravel Framework 12.73.0 (PHP 8.3.30, dev Windows) +
+WordPress 7.1.5 (PHP 8.3.30 + MySQL 8.4.3, dev Windows).
+Catat versi lokal setiap run; test menerima 12.x / 7.x apa pun.
 
-## Fixtures (all served via `phpx serve`, no app source changes)
+## Fixture (semua dilayani via `phpx serve`, tanpa ubah sumber app)
 
-| Fixture | Dir | GET / | Query/headers/cookies/body | Static | Notes |
+| Fixture | Dir | GET / | Query/header/cookie/body | Statik | Catatan |
 |---------|-----|-------|----------------------------|--------|-------|
-| vanilla-php | `examples/vanilla-php` | 200 `hello from phpx vanilla` | `rid` differs per request; `isolate.php` x2 = `clean` both | `style.css` 200 | Isolation + crash-recovery reference |
-| composer-autoload | `examples/composer-autoload` | 200 `composer-autoload ok` | `?name=ara` -> `greeter=hello ara` (`$_GET` via bootstrap); cookie/header/body round-trip | `style.css` 200 | Stub `vendor/autoload.php` (no network); PSR-4 `App\\` |
-| laravel-minimal (sim) | `examples/laravel-minimal` | 200 `laravel-minimal ok` | `/api/hello` JSON; middleware header; cookie/body echo | `style.css` 200 | No framework download; routing/env/middleware simulation |
-| wordpress-minimal (sim) | `examples/wordpress-minimal` | 200 `wordpress-minimal ok` + loop | `?p=2`, `?s=hello` | `style.css` 200 | `WP_SIM` constants, shortcode `[phpx]` -> `PHPX` |
-| woocommerce-minimal (sim, after WP baseline) | `examples/woocommerce-minimal` | 200 `woocommerce-minimal ok` | `?add_to_cart=101` -> cart/total; `?checkout=1` JSON | `style.css` 200 | Cart via query, totals in cents |
+| vanilla-php | `examples/vanilla-php` | 200 `hello from phpx vanilla` | `rid` beda per request; `isolate.php` x2 = `clean` keduanya | `style.css` 200 | Referensi isolasi + crash-recovery |
+| composer-autoload | `examples/composer-autoload` | 200 `composer-autoload ok` | `?name=ara` -> `greeter=hello ara` (`$_GET` via bootstrap); round-trip cookie/header/body | `style.css` 200 | Stub `vendor/autoload.php` (tanpa network); PSR-4 `App\\` |
+| laravel-minimal (sim) | `examples/laravel-minimal` | 200 `laravel-minimal ok` | JSON `/api/hello`; header middleware; echo cookie/body | `style.css` 200 | Tanpa unduh framework; simulasi routing/env/middleware |
+| wordpress-minimal (sim) | `examples/wordpress-minimal` | 200 `wordpress-minimal ok` + loop | `?p=2`, `?s=hello` | `style.css` 200 | Konstanta `WP_SIM`, shortcode `[phpx]` -> `PHPX` |
+| woocommerce-minimal (sim, setelah baseline WP) | `examples/woocommerce-minimal` | 200 `woocommerce-minimal ok` | `?add_to_cart=101` -> cart/total; `?checkout=1` JSON | `style.css` 200 | Cart via query, total dalam sen |
 
-Evidence: `cargo test -p phpx-server --test m4_compat` (5 tests: isolation/crash,
+Bukti: `cargo test -p phpx-server --test m4_compat` (isolasi/crash,
 composer+SAPI, laravel, wp+woo, `/metrics`).
 
-## PHP versions (M4 tested)
+## Versi PHP (teruji M4)
 
-| PHP | SAPI under test | Result |
+| PHP | SAPI yang diuji | Hasil |
 |-----|-----------------|--------|
-| 8.3.30 (cli, Windows dev) | `cli` one-shot | PASS (CI-equivalent local: M4 suite green) |
-| 8.4 / 8.5 | `cli` one-shot | Target per `php_version`; verify with `phpx doctor` (unverified warning if mismatch) |
-| < 8.3 | any | Unsupported (doctor warns; `php_version` target is 8.3+) |
+| 8.3.30 (cli, dev Windows) | `cli` one-shot | PASS (lokal setara CI: suite M4 hijau) |
+| 8.4 / 8.5 | `cli` one-shot | Target per `php_version`; verifikasi dengan `phpx doctor` (warning belum terverifikasi bila mismatch) |
+| < 8.3 | apa pun | Tidak didukung (doctor warning; target `php_version` 8.3+) |
 
-## Extension combos (M4)
+## Kombinasi ekstensi (M4)
 
-`phpx doctor` audits: `json`, `mbstring`, `curl`, `openssl`, `pdo`,
-`pdo_sqlite`, `fileinfo`, `filter`, `dom`, `gd`, `intl`. Missing = warning
-(some apps need it), never a hard error unless `php` itself is missing.
-Full matrix runbook: `php -m` on target host vs app requirements; record gaps here.
+`phpx doctor` mengaudit: `json`, `mbstring`, `curl`, `openssl`, `pdo`,
+`pdo_sqlite`, `fileinfo`, `filter`, `dom`, `gd`, `intl`. Hilang = warning
+(sebagian app butuh), bukan hard error kecuali `php` sendiri hilang.
+Runbook matriks penuh: `php -m` di host target vs kebutuhan app; catat gap di sini.
 
-## Unsupported / explicit limits
+## Tidak didukung / batas eksplisit
 
-- SAPI: only `cli` one-shot is supported. `fpm`/`cgi`/Apache handler are NOT used;
-  the gateway spawns `php <entry>` directly (see `sapi-audit.md`).
-- `php://input` is empty under CLI; use `phpx_input()` (bootstrap) or
+- SAPI: hanya worker `cli` yang didukung (one-shot fresh per request atau
+  persistent supervised). `fpm`/`cgi`/handler Apache TIDAK dipakai; gateway
+  men-spawn `php <entry>` langsung (lihat `sapi-audit.md`).
+- `php://input` kosong di CLI; pakai `phpx_input()` (bootstrap) atau
   `file_get_contents("php://input") ?: file_get_contents("php://stdin")`.
-- Persistent workers / OPcache cross-request caching: not provided in M4
-  (one-shot = fresh interpreter per request; slower bootstrap, stronger isolation).
-- Queue/scheduler/cache/storage backends: deferred to M5 (CLI stubs exit 2).
-- Embedded runtime: experimental-disabled until M6.
-- HTTP/2: deferred, not claimed.
+- Worker persistent tersedia sejak P0-B (supervised, handshake, recycle
+  graceful); cache lintas-request OPcache bukan klaim.
+- Backend queue/scheduler/cache/storage tersedia sejak M5 (bukan stub).
+- Runtime embedded: experimental opt-in sejak P2 (9/9 gerbang linked,
+  `runtime.mode=embedded`); default tetap process.
+- HTTP/2: ditunda, tidak diklaim.
 
-## M7 verification (RC)
+## Verifikasi M7 (RC)
 
-| Suite | Result |
+| Suite | Hasil |
 |-------|--------|
-| `phpx-server --lib` (redaction + traversal matrix + traceparent) | PASS (5/5) |
+| `phpx-server --lib` (redaksi + matriks traversal + traceparent) | PASS (5/5) |
 | `m7_security` (raw-socket 400, secret soak, symlink 403/404, Dockerfile non-root) | PASS (4/4) |
-| `m7_resilience` (saturation bounded + metrics observable + recovery, config gates) | PASS (2/2) |
-| `m4_compat` (vanilla/composer/laravel/wp/woo + /metrics) | PASS (process green; embedded parity + gateway via `p2_embedded_gateway`, vanilla live on linked) |
+| `m7_resilience` (saturasi terbatas + metrics teramati + recovery, gerbang config) | PASS (2/2) |
+| `m4_compat` (vanilla/composer/laravel/wp/woo + /metrics) | PASS (process hijau; paritas + gateway embedded via `p2_embedded_gateway`, vanilla live di linked) |
 | `m3_cli` (`doctor/metrics/queue/scheduler/cache/storage`) | PASS (6/6) |
-| `p0d_laravel` (real Laravel 12: welcome, 404, JSON 405, sessions, multipart) | PASS (5/5) |
-| `p0d_wordpress` (real WordPress 7.1 + WooCommerce 11.3: front, search, pretty, login, REST, comments, media auth, shop, product, cart/checkout docs, wc/v3; needs provisioned install + MySQL) | PASS (13/13), SKIP loudly when unprovisioned |
-| `p1a_resilience` (idle crash, circuit, in-flight drain x2, app-exit resync, reload, leak doc, recovery timeline, short soak) | PASS (9/9) |
-| `p0b_persistent` + `persistent` (supervised pool, state machine, guardian) | PASS (3+14) |
+| `p2_embedded_gateway` (pool embedded + routing + timeout eksplisit; stub fail-closed, linked live) | PASS (5/5) |
+| `p0d_laravel` (Laravel 12 asli: welcome, 404, JSON 405, session, multipart) | PASS (5/5) |
+| `p0d_wordpress` (WordPress 7.1 asli + WooCommerce 11.3: front, search, pretty, login, REST, comments, media auth, shop, product, dok cart/checkout, wc/v3; butuh install terprovisi + MySQL) | PASS (13/13), SKIP lantang bila tak terprovisi |
+| `p1a_resilience` (idle crash, sirkuit, drain in-flight x2, app-exit resync, reload, dok leak, timeline recovery, short soak) | PASS (9/9) |
+| `p0b_persistent` + `persistent` (pool terawasi, state machine, guardian) | PASS (3+14) |
 
-See `docs/operations/resilience.md` for the failure-injection matrix and recovery-timeline semantics.
+Lihat `docs/operations/resilience.md` untuk matriks failure-injection dan semantik timeline recovery.

@@ -1,16 +1,17 @@
-## ADR-0012: Modular Rust workspace and feature-gated subsystems
+## ADR-0012: Workspace Rust modular dan subsistem bergerbang fitur
 
--   **Status:** Accepted
--   **Decision:** Use a Cargo workspace with small crates organized
-    around stable subsystem boundaries. Optional platform features are
-    enabled through Cargo features and runtime configuration where
-    appropriate.
--   **Context:** A monolithic crate would make testing and ownership
-    difficult; excessive fragmentation too early would slow development.
--   **Consequences:**
-    -   Start with a small set of foundational crates and split only
-        when boundaries are clear.
-    -   Avoid cyclic dependencies.
-    -   Keep runtime contracts in a low-level crate.
-    -   Optional adapters must not be mandatory dependencies of the
-        minimal server.
+-   **Status:** Diterima (Accepted)
+-   **Keputusan:** Gunakan Cargo workspace dengan crate kecil yang
+    diorganisasikan di sekitar batas subsistem yang stabil. Fitur
+    platform opsional diaktifkan melalui Cargo features dan konfigurasi
+    runtime sebagaimana mestinya.
+-   **Konteks:** Satu crate monolitik akan menyulitkan pengujian dan
+    kepemilikan; fragmentasi berlebihan yang terlalu dini akan
+    memperlambat pengembangan.
+-   **Konsekuensi:**
+    -   Mulai dengan himpunan kecil crate fondasional dan pecah hanya
+        bila batasnya sudah jelas.
+    -   Hindari dependensi siklik.
+    -   Jaga kontrak runtime dalam crate tingkat rendah.
+    -   Adapter opsional tidak boleh menjadi dependensi wajib bagi
+        server minimal.

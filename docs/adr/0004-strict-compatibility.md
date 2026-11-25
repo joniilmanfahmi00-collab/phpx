@@ -1,20 +1,21 @@
-## ADR-0004: Strict PHP application compatibility
+## ADR-0004: Kompatibilitas aplikasi PHP yang ketat
 
--   **Status:** Accepted
--   **Decision:** PHPX targets unmodified, conventional PHP
-    applications. Platform-specific APIs are optional enhancements and
-    never required for baseline execution.
--   **Context:** The platform must be useful to the existing PHP
-    ecosystem, especially Laravel, WordPress, and WooCommerce.
--   **Consequences:**
-    -   PHPX must preserve normal PHP request semantics, environment
-        variables, document-root/front-controller behavior, headers,
-        cookies, request bodies, status codes, and error behavior.
-    -   Compatibility is verified using real application fixtures and
-        extension matrices.
-    -   PHPX does not promise compatibility with every extension or
-        every PHP SAPI behavior in v0.1.
-    -   Unsupported behavior must be documented precisely; PHPX must
-        fail clearly rather than silently alter application semantics.
-    -   Optional PHPX APIs require versioning and cannot be
-        prerequisites for ordinary application hosting.
+-   **Status:** Diterima (Accepted)
+-   **Keputusan:** PHPX menargetkan aplikasi PHP konvensional yang tidak
+    dimodifikasi. API khusus platform bersifat peningkatan opsional dan
+    tidak pernah diwajibkan untuk eksekusi dasar.
+-   **Konteks:** Platform ini harus berguna bagi ekosistem PHP yang ada,
+    terutama Laravel, WordPress, dan WooCommerce.
+-   **Konsekuensi:**
+    -   PHPX harus mempertahankan semantik request PHP yang normal,
+        variabel environment, perilaku document-root/front-controller,
+        header, cookie, body request, kode status, dan perilaku error.
+    -   Kompatibilitas diverifikasi menggunakan fixture aplikasi nyata
+        dan matriks ekstensi.
+    -   PHPX tidak menjanjikan kompatibilitas dengan setiap ekstensi
+        atau setiap perilaku SAPI PHP pada v0.1.
+    -   Perilaku yang tidak didukung harus didokumentasikan secara
+        tepat; PHPX harus gagal secara jelas daripada diam-diam mengubah
+        semantik aplikasi.
+    -   API PHPX opsional wajib berversi dan tidak boleh menjadi syarat
+        untuk hosting aplikasi biasa.

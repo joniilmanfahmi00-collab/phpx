@@ -1,149 +1,138 @@
-# PHPX Technical Specification v0.1
+# Spesifikasi Teknis PHPX v0.1
 
-**Status:** Baseline specification\
-**Version:** 0.1.0\
-**Date:** 2026-11-17\
-**Product:** PHPX
+**Status:** Spesifikasi baseline\
+**Versi:** 0.1.0\
+**Tanggal:** 2026-11-17 (diterjemahkan ke Indonesia + pembaruan status 2026-11-25)\
+**Produk:** PHPX
 
-## 1. Summary
+## 1. Ringkasan
 
-PHPX is a Rust-powered PHP application platform. It provides an HTTP
-gateway, PHP runtime management, supervised workers, and a path toward
-integrated queues, scheduling, cache, storage, and observability.
+PHPX adalah platform aplikasi PHP bertenaga Rust. Ia menyediakan gateway
+HTTP, manajemen runtime PHP, worker terawasi, dan jalur menuju antre,
+penjadwalan, cache, storage, dan observabilitas yang terintegrasi.
 
-PHPX does not replace PHP as an application language. It runs existing
-PHP applications with a strict compatibility goal and provides optional
-platform capabilities.
+PHPX tidak menggantikan PHP sebagai bahasa aplikasi. Ia menjalankan
+aplikasi PHP yang ada dengan target kompatibilitas ketat dan menyediakan
+kapabilitas platform opsional.
 
-### 1.1 Product goals
+### 1.1 Tujuan produk
 
-1.  Run conventional PHP applications without source-code changes.
-2.  Provide one operational interface for server and PHP worker
-    lifecycle.
-3.  Support both native Linux and Docker deployments.
-4.  Support process and embedded PHP runtime backends behind a common
-    abstraction.
-5.  Provide safe defaults, bounded resource use, and actionable
-    diagnostics.
-6.  Grow from a reliable HTTP/PHP execution core into a complete
-    application platform.
+1.  Menjalankan aplikasi PHP konvensional tanpa perubahan kode sumber.
+2.  Menyediakan satu antarmuka operasional untuk lifecycle server dan worker PHP.
+3.  Mendukung deployment Linux nativ dan Docker.
+4.  Mendukung backend runtime PHP process dan embedded di balik abstraksi bersama.
+5.  Menyediakan default aman, pemakaian resource terbatas, dan diagnostik actionable.
+6.  Tumbuh dari inti eksekusi HTTP/PHP yang andal menjadi platform aplikasi lengkap.
 
-### 1.2 Non-goals for v0.1
+### 1.2 Non-tujuan v0.1
 
--   Reimplementing the PHP language or Zend Engine.
--   Replacing Composer or PHP extensions.
--   Claiming universal compatibility with every PHP SAPI or extension.
--   Native Windows production support.
+-   Menulis ulang bahasa PHP atau Zend Engine.
+-   Menggantikan Composer atau ekstensi PHP.
+-   Mengklaim kompatibilitas universal dengan setiap SAPI atau ekstensi PHP.
+-   Dukungan produksi Windows nativ.
 -   HTTP/3.
--   Guaranteed hostile multi-tenant code isolation.
--   Replacing Redis, PostgreSQL, or object storage.
--   Making embedded runtime the default production backend.
+-   Isolasi kode-bermusuhan multi-tenant yang dijamin.
+-   Menggantikan Redis, PostgreSQL, atau object storage.
+-   Menjadikan embedded runtime backend produksi default.
 
-## 2. Supported platform baseline
+## 2. Baseline platform yang didukung
 
-### 2.1 Operating systems
+### 2.1 Sistem operasi
 
--   Linux is the primary and supported v0.1 host.
--   Docker deployment targets Linux containers.
--   Windows development may use WSL2 or Docker Desktop.
--   macOS may be used for development where dependencies permit, but is
-    not a v0.1 production support commitment.
+-   Linux adalah host v0.1 primer dan yang didukung.
+-   Deployment Docker menarget kontainer Linux.
+-   Pengembangan Windows boleh memakai WSL2 atau Docker Desktop.
+-   macOS boleh dipakai untuk pengembangan di mana dependensi memungkinkan,
+    tetapi bukan komitmen dukungan produksi v0.1.
 
-### 2.2 PHP versions
+### 2.2 Versi PHP
 
-Initial compatibility targets are PHP 8.3, 8.4, and 8.5, subject to
-availability of supported upstream builds, ABI compatibility, and CI
-coverage. The supported matrix must be published per release.
+Target kompatibilitas awal adalah PHP 8.3, 8.4, dan 8.5, tunduk pada
+ketersediaan build upstream yang didukung, kompatibilitas ABI, dan cakupan
+CI. Matriks yang didukung harus dipublikasikan per rilis.
 
-The Process Runtime is the baseline compatibility path. Embedded Runtime
-support may initially cover a narrower matrix.
+Process Runtime adalah jalur kompatibilitas baseline. Dukungan Embedded
+Runtime awalnya boleh mencakup matriks yang lebih sempit.
 
 ### 2.3 Rust
 
-Use a pinned stable Rust toolchain in `rust-toolchain.toml`. Minimum
-supported Rust version (MSRV) is to be established after dependency
-selection and CI validation, then recorded in release metadata.
+Pakai toolchain Rust stabil yang di-pin di `rust-toolchain.toml`. Minimum
+supported Rust version (MSRV) ditetapkan setelah pemilihan dependensi dan
+validasi CI, lalu dicatat di metadata rilis.
 
-## 3. System architecture
+## 3. Arsitektur sistem
 
-### 3.1 Logical components
+### 3.1 Komponen logis
 
--   **CLI:** command parsing, diagnostics, runtime and platform
-    operations.
--   **Core:** shared types, application identity, errors, lifecycle
-    contracts.
--   **Config:** TOML loading, environment overrides, validation,
-    defaults.
--   **Gateway:** listeners, TLS, HTTP protocol handling, static assets.
--   **Router:** host/path dispatch and PHP front-controller mapping.
--   **Runtime Manager:** selects and supervises runtime backends.
--   **Process Runtime:** starts and communicates with PHP child
-    processes.
--   **Embedded Runtime:** experimental PHP Embed SAPI bridge.
--   **Worker Manager:** pool sizing, readiness, health, recycling,
-    draining.
--   **Queue:** job lifecycle and backend adapters.
--   **Scheduler:** recurring and delayed task dispatch.
--   **Cache:** local cache and external cache adapters.
--   **Storage:** local and S3-compatible object storage adapters.
--   **Observability:** logs, metrics, traces, health endpoints.
--   **Security:** permissions, limits, secret handling, isolation
-    policy.
+-   **CLI:** parsing perintah, diagnostik, operasi runtime dan platform.
+-   **Core:** tipe bersama, identitas aplikasi, error, kontrak lifecycle.
+-   **Config:** pemuatan TOML, override environment, validasi, default.
+-   **Gateway:** listener, TLS, penanganan protokol HTTP, aset statik.
+-   **Router:** dispatch host/path dan pemetaan front-controller PHP.
+-   **Runtime Manager:** memilih dan menyupervisi backend runtime.
+-   **Process Runtime:** men-start dan berkomunikasi dengan proses anak PHP.
+-   **Embedded Runtime:** bridge PHP Embed SAPI eksperimental (live pada build linked sejak P2).
+-   **Worker Manager:** ukuran pool, readiness, health, recycling, draining.
+-   **Queue:** lifecycle job dan adapter backend.
+-   **Scheduler:** dispatch tugas berulang dan tertunda.
+-   **Cache:** cache lokal dan adapter cache eksternal.
+-   **Storage:** adapter object storage lokal dan kompatibel-S3.
+-   **Observabilitas:** log, metrik, trace, endpoint health.
+-   **Keamanan:** perizinan, batas, penanganan secret, kebijakan isolasi.
 
-### 3.2 Request lifecycle
+### 3.2 Siklus hidup request
 
-1.  Accept a connection at the Rust gateway.
-2.  Parse and validate the HTTP request.
-3.  Resolve the application and route.
-4.  Serve eligible static assets directly.
-5.  For dynamic requests, construct a bounded execution envelope.
-6.  Acquire an available PHP worker for the configured runtime.
-7.  Forward request metadata and body through the selected transport.
-8.  Execute the application entry point.
-9.  Return status, headers, and response body to the gateway.
-10. Release or recycle the worker according to health and policy.
-11. Emit correlated request and runtime telemetry.
+1.  Terima koneksi di gateway Rust.
+2.  Parse dan validasi request HTTP.
+3.  Selesaikan aplikasi dan rute.
+4.  Sajikan aset statik yang memenuhi syarat langsung.
+5.  Untuk request dinamis, bangun envelope eksekusi terbatas.
+6.  Akuisisi worker PHP yang tersedia untuk runtime terkonfigurasi.
+7.  Teruskan metadata dan body request lewat transport terpilih.
+8.  Eksekusi entry point aplikasi.
+9.  Kembalikan status, header, dan body respons ke gateway.
+10. Lepas atau recycle worker sesuai health dan kebijakan.
+11. Emisikan telemetri request dan runtime yang terkorelasi.
 
-The gateway must apply backpressure when no worker capacity is
-available. It must not create an unbounded queue of pending requests.
+Gateway harus menerapkan backpressure bila kapasitas worker tak tersedia.
+Gateway tidak boleh membuat antre request tertunda tak terbatas.
 
-### 3.3 Request envelope
+### 3.3 Envelope request
 
-The runtime boundary must define a versioned request envelope
-containing, at minimum:
+Batas runtime harus mendefinisikan envelope request berversi yang minimal berisi:
 
--   protocol version;
--   request ID and trace context;
+-   versi protokol;
+-   ID request dan konteks trace;
 -   method;
 -   scheme;
 -   host;
--   path and query string;
--   normalized headers;
--   remote address metadata where available;
--   content length and body stream or bounded body payload;
--   application root and entry point;
--   deadline/timeout metadata;
--   environment profile identifier.
+-   path dan query string;
+-   header ternormalisasi;
+-   metadata alamat remote bila tersedia;
+-   panjang konten dan stream body atau payload body terbatas;
+-   root aplikasi dan entry point;
+-   metadata deadline/timeout;
+-   pengenal profil environment.
 
-The response envelope contains:
+Envelope respons berisi:
 
--   request ID;
--   status code;
--   response headers;
--   response body stream or bounded payload;
--   execution duration;
--   worker outcome and diagnostic classification.
+-   ID request;
+-   kode status;
+-   header respons;
+-   stream body respons atau payload terbatas;
+-   durasi eksekusi;
+-   outcome worker dan klasifikasi diagnostik.
 
-Header normalization must preserve application-visible semantics and
-must not permit hop-by-hop header misuse. Body handling must be bounded
-and support streaming where the transport implementation allows it.
+Normalisasi header harus menjaga semantik yang terlihat aplikasi dan tidak
+boleh memungkinkan penyalahgunaan header hop-by-hop. Penanganan body harus
+terbatas dan mendukung streaming di mana implementasi transport memungkinkan.
 
-## 4. Runtime backends
+## 4. Backend runtime
 
-### 4.1 Common runtime contract
+### 4.1 Kontrak runtime bersama
 
-The runtime abstraction should expose lifecycle operations conceptually
-equivalent to:
+Abstraksi runtime harus mengekspos operasi lifecycle yang secara konseptual
+setara:
 
 -   `start(config)`
 -   `health()`
@@ -153,189 +142,185 @@ equivalent to:
 -   `shutdown()`
 -   `capabilities()`
 
-The actual Rust API may use async methods for orchestration, but
-blocking engine execution must not run on Tokio executor threads.
+API Rust aktual boleh memakai method async untuk orkestrasi, tetapi eksekusi
+engine yang blocking tidak boleh jalan di thread eksekutor Tokio.
 
 ### 4.2 Process Runtime
 
-**Status:** Required for v0.1 baseline.
+**Status:** Wajib untuk baseline v0.1.
 
-Responsibilities:
+Tanggung jawab:
 
--   Discover and validate PHP executable.
--   Verify PHP version and required extensions.
--   Start PHP child workers.
--   Establish bounded IPC.
--   Track process IDs and exit status.
--   Enforce request deadlines and process resource limits where
-    available.
--   Restart unhealthy workers with backoff.
--   Drain workers during reload and shutdown.
+-   Temukan dan validasi executable PHP.
+-   Verifikasi versi PHP dan ekstensi yang dibutuhkan.
+-   Start worker anak PHP.
+-   Bangun IPC terbatas.
+-   Lacak ID proses dan status keluar.
+-   Tegakkan deadline request dan batas resource process bila tersedia.
+-   Restart worker tak sehat dengan backoff.
+-   Drain worker saat reload dan shutdown.
 
-Transport selection:
+Pemilihan transport:
 
--   Prototype a framed Unix Domain Socket protocol for a PHP CLI worker.
--   Evaluate FastCGI as an interoperability mode.
--   Do not assume PHP-FPM is required.
--   Keep transport implementation behind an internal interface.
+-   Prototipe protokol Unix Domain Socket berbingkai untuk worker PHP CLI.
+-   Evaluasi FastCGI sebagai mode interoperabilitas.
+-   Jangan asumsikan PHP-FPM dibutuhkan.
+-   Jaga implementasi transport di balik antarmuka internal.
 
-The PHP worker bootstrap must be small, auditable, and compatible with
-normal PHP request semantics. Long-lived workers must reset
-request-scoped state or be recycled. If reliable reset cannot be
-guaranteed for an application, use one-request workers or a compatible
-conventional execution mode.
+Bootstrap worker PHP harus kecil, auditable, dan kompatibel dengan semantik
+request PHP normal. Worker berumur-panjang harus me-reset state terlingkup
+request atau di-recycle. Bila reset andal tidak bisa dijamin untuk sebuah
+aplikasi, pakai worker satu-request atau mode eksekusi konvensional yang
+kompatibel.
 
 ### 4.3 Embedded Runtime
 
-**Status:** Experimental; disabled by default.
+**Status:** Eksperimental; nonaktif default. Live pada build linked sejak
+P2 (9/9 gerbang promosi, serve path terkabel, `runtime.mode=embedded`).
 
-Implementation considerations:
+Pertimbangan implementasi:
 
--   Use PHP Embed SAPI and a narrow C ABI bridge.
--   Pin and validate PHP build configuration and ABI.
--   Keep Zend/PHP lifecycle calls within a controlled execution domain.
--   Do not call PHP NTS concurrently from arbitrary threads.
--   Avoid holding Rust locks across callbacks into PHP.
--   Define ownership and lifetime rules for strings, buffers, and engine
-    resources.
--   Contain crashes using a process boundary when required.
--   Advertise capabilities and limitations at runtime.
+-   Pakai PHP Embed SAPI dan bridge C ABI yang sempit.
+-   Pin dan validasi konfigurasi build dan ABI PHP.
+-   Jaga panggilan lifecycle Zend/PHP dalam domain eksekusi terkendali.
+-   Jangan panggil PHP NTS konkuren dari thread sembarang.
+-   Hindari menahan lock Rust lintas callback ke PHP.
+-   Definisikan aturan ownership dan lifetime untuk string, buffer, dan
+    resource engine.
+-   Bendung crash memakai batas process bila diperlukan.
+-   Iklankan kapabilitas dan batasan saat runtime.
 
-Embedded Runtime must pass the same application compatibility suite as
-Process Runtime for every capability it claims. It must not be promoted
-to production default based on throughput tests alone.
+Embedded Runtime harus lolos suite kompatibilitas aplikasi yang sama dengan
+Process Runtime untuk setiap kapabilitas yang diklaimnya. Ia tidak boleh
+dipromosikan ke default produksi hanya berdasar test throughput.
 
-## 5. Worker management
+## 5. Manajemen worker
 
-### 5.1 Worker states
+### 5.1 State worker
 
 `Starting -> Ready -> Busy -> Ready`
 
-Additional transitions:
+Transisi tambahan:
 
 -   `Ready -> Draining -> Stopped`
--   `Busy -> Draining -> Stopped` after the current request
+-   `Busy -> Draining -> Stopped` setelah request berjalan
 -   `Busy -> Unhealthy -> Restarting -> Ready`
--   `Starting -> Failed` (Failed is terminal for that worker incarnation, with operator-visible diagnostics; Stopped is graceful/drained stop. Full lifecycle, restart budget, and soft/hard memory policy are refined in ADR-0014, which extends this section.)
+-   `Starting -> Failed` (Failed terminal untuk inkarnasi worker itu, dengan diagnostik terlihat operator; Stopped adalah stop graceful/terdrain. Lifecycle penuh, budget restart, dan kebijakan memori soft/hard disempurnakan di ADR-0014 yang memperluas seksi ini.)
 
-### 5.2 Worker policies
+### 5.2 Kebijakan worker
 
-Configurable controls:
+Kontrol yang dapat dikonfigurasi:
 
--   minimum and maximum workers;
--   maximum concurrent requests per worker (default 1 for process
-    workers);
--   maximum requests before recycling;
--   request execution timeout;
--   startup timeout;
--   graceful drain timeout;
--   restart backoff;
--   health-check interval;
--   per-worker memory target (refined as soft limit for graceful recycle and hard limit for protective termination in ADR-0014; overshoot possible due to sampling/termination latency);
--   queue wait timeout.
+-   worker minimum dan maksimum;
+-   request konkuren maksimum per worker (default 1 untuk worker process);
+-   request maksimum sebelum recycling;
+-   timeout eksekusi request;
+-   timeout startup;
+-   timeout drain graceful;
+-   backoff restart;
+-   interval health-check;
+-   target memori per-worker (disempurnakan sebagai batas soft untuk recycle graceful dan batas hard untuk terminasi protektif di ADR-0014; overshoot mungkin karena latensi sampling/terminasi);
+-   timeout tunggu antre.
 
-Worker pool limits must be bounded. A worker crash must not crash the
-gateway.
+Batas pool worker harus terbatas. Crash worker tidak boleh menjatuhkan gateway.
 
 ### 5.3 Backpressure
 
-When all workers are busy:
+Bila semua worker sibuk:
 
--   queue only up to a configured bound;
--   reject or time out excess requests predictably;
--   expose saturation metrics;
--   avoid unbounded memory growth.
+-   antrekan hanya hingga bound terkonfigurasi;
+-   tolak atau timeout-kan kelebihan request secara dapat diprediksi;
+-   ekspos metrik saturasi;
+-   hindari pertumbuhan memori tak terbatas.
 
-## 6. HTTP gateway
+## 6. Gateway HTTP
 
-### 6.1 v0.1 requirements
+### 6.1 Syarat v0.1
 
--   HTTP/1.1 support.
--   HTTP/2 target, gated by integration tests.
+-   Dukungan HTTP/1.1.
+-   Target HTTP/2, digerbangi integration test.
 -   TLS via Rustls.
--   Host and path routing.
--   PHP front-controller dispatch.
--   Static file serving.
--   Configurable request and response limits.
--   Graceful shutdown.
--   Request IDs and structured access logs.
+-   Routing host dan path.
+-   Dispatch front-controller PHP.
+-   Serving file statik.
+-   Batas request dan respons yang dapat dikonfigurasi.
+-   Shutdown graceful.
+-   ID request dan access log terstruktur.
 
-### 6.2 Deferred
+### 6.2 Ditunda
 
 -   HTTP/3.
--   Built-in CDN behavior.
--   Full reverse-proxy feature parity with Nginx/Caddy.
--   Advanced WAF functionality.
+-   Perilaku CDN bawaan.
+-   Paritas fitur reverse-proxy penuh dengan Nginx/Caddy.
+-   Fungsionalitas WAF lanjutan.
 
-### 6.3 Static file safety
+### 6.3 Keamanan file statik
 
--   Resolve paths relative to configured document root.
--   Reject path traversal.
--   Do not follow symlinks outside the allowed root unless explicitly
-    configured.
--   Set MIME types safely.
--   Support conditional requests and range requests as implementation
-    matures.
--   Never expose PHP source files as static content.
+-   Selesaikan path relatif ke document root terkonfigurasi.
+-   Tolak traversal path.
+-   Jangan ikuti symlink di luar root yang diizinkan kecuali dikonfigurasi eksplisit.
+-   Set tipe MIME dengan aman.
+-   Dukung request kondisional dan range saat implementasi matang.
+-   Jangan pernah mengekspos file sumber PHP sebagai konten statik.
 
-## 7. Platform services
+## 7. Layanan platform
 
 ### 7.1 Queue
 
-The queue API must support enqueue, reserve/claim, acknowledge, fail,
-retry, delay, and dead-letter operations.
+API antre harus mendukung operasi enqueue, reserve/claim, acknowledge, gagal,
+retry, tunda, dan dead-letter.
 
-Initial drivers:
+Driver awal:
 
--   in-memory: development/testing only, non-durable;
--   SQLite: durable single-node baseline;
--   Redis: optional adapter.
+-   in-memory: hanya pengembangan/testing, non-durable;
+-   SQLite: baseline tahan-lama satu-node;
+-   Redis: adapter opsional.
 
-Required semantics:
+Semantik yang disyaratkan:
 
--   durable acknowledgement for durable drivers;
--   bounded retries;
--   exponential backoff with jitter;
--   visibility timeout or lease recovery;
--   idempotency guidance;
--   dead-letter handling;
--   graceful worker shutdown.
+-   acknowledgement tahan-lama untuk driver tahan-lama;
+-   retry terbatas;
+-   backoff eksponensial dengan jitter;
+-   visibility timeout atau recovery lease;
+-   panduan idempotensi;
+-   penanganan dead-letter;
+-   shutdown graceful worker.
 
-Exactly-once execution is not promised. Consumers must be designed for
-at-least-once delivery and idempotent job handling.
+Eksekusi tepat-sekali tidak dijanjikan. Konsumen harus dirancang untuk
+delivery at-least-once dan penanganan job idempoten.
 
 ### 7.2 Scheduler
 
--   Cron-compatible expressions.
--   Timezone-aware schedules.
--   Persistent execution records where configured.
--   Duplicate-dispatch protection for a single-node baseline.
--   Missed-run policy must be explicit.
--   Scheduler dispatches jobs; it does not execute long-running PHP work
-    on the gateway thread.
+-   Ekspresi kompatibel-cron.
+-   Jadwal sadar-timezone.
+-   Rekam eksekusi persisten bila dikonfigurasi.
+-   Proteksi dispatch-duplikat untuk baseline satu-node.
+-   Kebijakan run-terlewat harus eksplisit.
+-   Scheduler mendispatch job; ia tidak mengeksekusi kerja PHP berumur-panjang
+    di thread gateway.
 
 ### 7.3 Cache
 
-Initial implementations:
+Implementasi awal:
 
--   bounded in-memory cache;
--   filesystem cache;
--   optional Redis adapter.
+-   cache in-memory terbatas;
+-   cache filesystem;
+-   adapter Redis opsional.
 
-PHP OPcache remains owned by the PHP runtime. PHPX cache is not a
-replacement for OPcache.
+OPcache PHP tetap milik runtime PHP. Cache PHPX bukan pengganti OPcache.
 
-### 7.4 Storage and sessions
+### 7.4 Storage dan session
 
-Storage abstraction targets local filesystem first and S3-compatible
-storage later. Session handling must support conventional PHP session
-behavior where possible. Any platform-native session API is optional.
+Abstraksi storage menarget filesystem lokal dulu dan storage
+kompatibel-S3 kemudian. Penanganan session harus mendukung perilaku
+session PHP konvensional bila memungkinkan. API session nativ-platform
+mana pun bersifat opsional.
 
-## 8. Configuration
+## 8. Konfigurasi
 
-Primary file: `phpx.toml`.
+File primer: `phpx.toml`.
 
-Illustrative configuration:
+Contoh ilustratif konfigurasi:
 
 ``` toml
 schema_version = 1
@@ -360,7 +345,7 @@ workers = 4
 max_requests = 1000
 request_timeout_seconds = 30
 startup_timeout_seconds = 10
-memory_limit = "256M" # simplified; full model uses [runtime.process.lifecycle] + [runtime.process.memory] soft/hard limits per ADR-0014
+memory_limit = "256M" # disederhanakan; model penuh memakai [runtime.process.lifecycle] + [runtime.process.memory] batas soft/hard per ADR-0014
 
 [runtime.embedded]
 enabled = false
@@ -382,13 +367,17 @@ json_logs = true
 metrics = true
 ```
 
-This is illustrative and simplified, not a frozen schema. The detailed lifecycle/memory/adaptive model (\[runtime.process.lifecycle\], \[runtime.process.memory\], \[runtime.process.adaptive\] with adaptive disabled by default) is defined in ADR-0014 Section 2.9 and takes precedence for worker resource management. All fields require typed
-validation, documented defaults, and migration/versioning rules. Secrets
-must not be stored in committed configuration.
+Ini ilustratif dan disederhanakan, bukan skema beku. Model
+lifecycle/memori/adaptif detail (\[runtime.process.lifecycle\],
+\[runtime.process.memory\], \[runtime.process.adaptive\] dengan adaptif
+nonaktif default) didefinisikan di ADR-0014 Seksi 2.9 dan didahulukan
+untuk manajemen resource worker. Semua field butuh validasi bertipe,
+default terdokumentasi, dan aturan migrasi/versionalisasi. Secret tidak
+boleh disimpan di konfigurasi yang di-commit.
 
-## 9. CLI contract
+## 9. Kontrak CLI
 
-Initial command families:
+Keluarga perintah awal:
 
 ``` text
 phpx serve
@@ -405,110 +394,112 @@ phpx scheduler run
 phpx metrics
 ```
 
-CLI output should be human-readable by default and offer
-machine-readable JSON where practical. Exit codes must be stable and
-documented.
+Output CLI harus human-readable secara default dan menawarkan JSON
+machine-readable bila praktis. Exit code harus stabil dan
+terdokumentasi.
 
-## 10. Security requirements
+## 10. Syarat keamanan
 
--   Run as a non-root user by default where feasible.
--   Separate supervisor responsibilities from application execution.
--   Bound request sizes, queue sizes, worker counts, and execution
-    times.
--   Do not expose secrets in logs or diagnostics.
--   Restrict application filesystem access to configured roots where
-    practical.
--   Validate static file paths against traversal and symlink escapes.
--   Apply OS/container memory and CPU limits for production workloads.
--   Treat PHP extensions and application code as executable trusted code
-    unless an explicit sandbox is configured.
--   Do not claim strong multi-tenant isolation in v0.1.
+-   Jalan sebagai user non-root secara default bila memungkinkan.
+-   Pisahkan tanggung jawab supervisor dari eksekusi aplikasi.
+-   Batasi ukuran request, ukuran antre, jumlah worker, dan waktu
+    eksekusi.
+-   Jangan ekspos secret di log atau diagnostik.
+-   Batasi akses filesystem aplikasi ke root terkonfigurasi bila
+    praktis.
+-   Validasi path file statik terhadap traversal dan symlink escape.
+-   Terapkan batas memori dan CPU OS/container untuk workload produksi.
+-   Perlakukan ekstensi PHP dan kode aplikasi sebagai kode executable
+    tepercaya kecuali sandbox eksplisit dikonfigurasi.
+-   Jangan klaim isolasi multi-tenant kuat di v0.1.
 
-## 11. Observability
+## 11. Observabilitas
 
-Required baseline:
+Baseline yang disyaratkan:
 
--   structured logs;
--   request ID propagation;
--   worker lifecycle events;
--   readiness and liveness health;
--   request count and latency;
--   active, idle, busy, failed worker counts;
--   PHP execution duration;
--   queue depth and job outcomes;
--   restart and timeout counters.
+-   log terstruktur;
+-   propagasi ID request;
+-   event lifecycle worker;
+-   health readiness dan liveness;
+-   jumlah dan latensi request;
+-   jumlah worker aktif, idle, sibuk, gagal;
+-   durasi eksekusi PHP;
+-   kedalaman antre dan outcome job;
+-   counter restart dan timeout.
 
-Prometheus metrics are the initial metrics interface. OpenTelemetry
-tracing is introduced incrementally. Sensitive headers, tokens, cookies,
-and request bodies must be redacted by default.
+Metrik Prometheus adalah antarmuka metrik awal. Tracing OpenTelemetry
+diperkenalkan bertahap. Header sensitif, token, cookie, dan body request
+harus disunting secara default.
 
-## 12. Testing and compatibility
+## 12. Testing dan kompatibilitas
 
-### 12.1 Test layers
+### 12.1 Lapisan test
 
--   unit tests for core types, config, routing, and state machines;
--   process integration tests using multiple PHP versions;
--   HTTP integration tests;
--   runtime contract tests shared by both backends;
--   application fixtures for vanilla PHP, Laravel, and WordPress;
--   queue durability and recovery tests;
--   failure injection and worker crash tests;
--   load and soak tests;
--   security tests for path traversal, request limits, and privilege
-    boundaries.
+-   unit test untuk tipe inti, config, routing, dan state machine;
+-   integration test process memakai banyak versi PHP;
+-   integration test HTTP;
+-   contract test runtime bersama kedua backend;
+-   fixture aplikasi untuk PHP vanilla, Laravel, dan WordPress;
+-   test durabilitas dan recovery queue;
+-   test failure injection dan crash worker;
+-   test beban dan soak;
+-   test keamanan untuk traversal path, batas request, dan batas
+    privilege.
 
-### 12.2 Compatibility fixtures
+### 12.2 Fixture kompatibilitas
 
-Minimum initial fixtures:
+Fixture awal minimum:
 
-1.  Vanilla PHP front controller.
-2.  Composer autoloading.
-3.  Laravel request lifecycle and common middleware.
-4.  WordPress front controller, permalinks, uploads, cookies, and admin.
-5.  WooCommerce checkout/session smoke tests when WordPress baseline is
-    stable.
+1.  Front controller PHP vanilla.
+2.  Autoloading Composer.
+3.  Lifecycle request Laravel dan middleware umum.
+4.  Front controller WordPress, permalink, upload, cookie, dan admin.
+5.  Smoke test checkout/session WooCommerce bila baseline WordPress
+    stabil.
 
-Tests must verify response status, headers, cookies, request body, query
-parameters, filesystem behavior, and error handling.
+Test harus memverifikasi status respons, header, cookie, body request,
+parameter query, perilaku filesystem, dan penanganan error.
 
-### 12.3 Release gates
+### 12.3 Gerbang rilis
 
-A release candidate requires:
+Kandidat rilis mensyaratkan:
 
--   no known critical security issue;
--   deterministic startup and shutdown;
--   worker crash recovery;
--   bounded behavior under saturation;
--   no request cross-contamination in persistent worker tests;
--   compatibility results published for each claimed runtime/backend
-    combination;
--   documented limitations.
+-   tanpa isu keamanan kritis yang diketahui;
+-   startup dan shutdown deterministik;
+-   recovery crash worker;
+-   perilaku terbatas di bawah saturasi;
+-   tanpa kontaminasi silang request di test worker persistent;
+-   hasil kompatibilitas dipublikasikan untuk tiap kombinasi
+    runtime/backend yang diklaim;
+-   batasan terdokumentasi.
 
-## 13. Performance methodology
+## 13. Metodologi performa
 
-Do not publish performance claims without reproducible tests.
+Jangan publikasikan klaim performa tanpa test yang dapat direproduksi.
 
-Benchmark against appropriate baselines including Nginx + PHP-FPM and, where relevant for worker lifecycle claims, FrankenPHP, RoadRunner, and Swoole/OpenSwoole, using identical PHP builds,
-extensions, application code, hardware, and workload.
+Benchmark terhadap baseline yang sesuai termasuk Nginx + PHP-FPM dan, bila
+relevan untuk klaim lifecycle worker, FrankenPHP, RoadRunner, dan
+Swoole/OpenSwoole, memakai build PHP, ekstensi, kode aplikasi, hardware,
+dan workload identik.
 
-Measure:
+Ukur:
 
 -   throughput;
--   p50, p95, and p99 latency;
--   CPU and RSS memory;
--   startup time;
--   worker restart behavior;
--   saturation and recovery;
--   sustained load and memory growth.
+-   latensi p50, p95, dan p99;
+-   memori CPU dan RSS;
+-   waktu startup;
+-   perilaku restart worker;
+-   saturasi dan recovery;
+-   beban berkelanjutan dan pertumbuhan memori.
 
-Report both simple PHP endpoint results and representative
-Laravel/WordPress workloads. A faster microbenchmark is not sufficient
-evidence for production readiness.
+Laporkan hasil endpoint PHP sederhana maupun workload Laravel/WordPress
+yang representatif. Microbenchmark yang lebih cepat bukan bukti cukup
+untuk kesiapan produksi.
 
-## 14. Initial crate layout
+## 14. Tata letak crate awal
 
-Start with a small workspace and split crates as boundaries become
-concrete:
+Mulai dengan workspace kecil dan belah crate saat batas menjadi
+konkret:
 
 ``` text
 phpx/
@@ -545,31 +536,28 @@ phpx/
     └── operations/
 ```
 
-Do not create empty crates solely to match this tree. Introduce each
-crate when there is code and a stable responsibility.
+Jangan buat crate kosong hanya agar cocok dengan tree ini. Perkenalkan tiap
+crate bila ada kode dan tanggung jawab stabil.
 
-Mapping note: phpx-server implements the Gateway in Section 3.1; phpx-worker implements Worker Manager supervision; phpx-runtime holds the common runtime contract. Storage, Security policy, and Router start as modules inside existing crates and split into dedicated crates only when boundaries stabilize. Docs live in docs/: adr/, ARCHITECTURE_DECISIONS.md, TECHNICAL_SPEC_v0.1.md, architecture/overview.md, architecture/m1-notes.md, and operations/linux-prerequisites.md. Router, Storage, and Security policy start as modules inside existing crates and split only when boundaries stabilize.
+Catatan pemetaan: phpx-server mengimplementasikan Gateway di Seksi 3.1; phpx-worker mengimplementasikan supervisi Worker Manager; phpx-runtime memegang kontrak runtime bersama. Storage, kebijakan Security, dan Router mulai sebagai modul di dalam crate eksisting dan belah menjadi crate khusus hanya bila batas stabil. Dok tinggal di docs/: adr/, ARCHITECTURE_DECISIONS.md, TECHNICAL_SPEC_v0.1.md, architecture/overview.md, architecture/m1-notes.md, dan operations/linux-prerequisites.md. Router, Storage, dan kebijakan Security mulai sebagai modul di dalam crate eksisting dan belah hanya bila batas stabil.
 
-## 15. v0.1 acceptance criteria
+## 15. Kriteria penerimaan v0.1
 
-PHPX v0.1 developer preview is acceptable when:
+Developer preview PHPX v0.1 dapat diterima bila:
 
-1.  `phpx doctor` detects PHP and reports missing prerequisites.
-2.  `phpx serve` starts the Rust gateway.
-3.  A vanilla PHP application is served through the Process Runtime.
-4.  Static assets are served safely.
-5.  Multiple PHP workers are supervised.
-6.  Worker crashes are detected and recovered without taking down the
-    gateway.
-7.  Request concurrency and queueing are bounded.
-8.  Graceful shutdown drains active requests within configured limits.
-9.  Docker and native Linux quickstarts work.
-10. Configuration errors are actionable.
-11. Basic logs, health checks, and metrics are available.
-12. Known compatibility limitations are documented.
+1.  `phpx doctor` mendeteksi PHP dan melaporkan prasyarat yang hilang.
+2.  `phpx serve` men-start gateway Rust.
+3.  Aplikasi PHP vanilla dilayani lewat Process Runtime.
+4.  Aset statik disajikan aman.
+5.  Banyak worker PHP disupervisi.
+6.  Crash worker terdeteksi dan pulih tanpa menjatuhkan gateway.
+7.  Konkurensi dan antrean request dibatasi.
+8.  Shutdown graceful men-drain request aktif dalam batas terkonfigurasi.
+9.  Quickstart Docker dan Linux nativ bekerja.
+10. Error konfigurasi actionable.
+11. Log dasar, health check, dan metrik tersedia.
+12. Keterbatasan kompatibilitas yang diketahui didokumentasikan.
 
-Queue, scheduler, embedded runtime, and broad framework compatibility
-may be delivered incrementally; they must not delay a reliable first
-HTTP/PHP execution path.
-
-
+Queue, scheduler, embedded runtime, dan kompatibilitas framework luas
+telah dikirim bertahap (M5-M6, P2); jalur eksekusi HTTP/PHP pertama yang
+andal tidak tertunda olehnya.

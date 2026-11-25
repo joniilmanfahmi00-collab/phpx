@@ -1,281 +1,289 @@
-# PHPX embedded runtime (M6 experimental)
+# Runtime embedded PHPX (M6 eksperimental)
 
-Status: M6 gates partially proven — ABI pin, execution domain, ownership,
-containment DONE and unit-proven; extension audit live; isolation lifecycle,
-engine lifecycle and gate assessor modeled; compat parity and stability HOLD
-until a live engine executes. `available` is derived from the gates
-(`gates::available()`, fail-closed) instead of a literal false.
+Status: gerbang M6 terbukti — pin ABI, domain eksekusi, ownership,
+containment DONE dan terbukti unit; audit ekstensi live; isolasi terbukti
+live; kesetaraan kompatibilitas terbukti live; stabilitas terbukti via soak
+terarsip; jalur serve P2 terkabel ke gateway. `available` diturunkan dari
+gerbang (`gates::available()`, fail-closed), bukan literal false.
 
-Process Runtime stays the active backend. Embedded is opt-in and never default.
+Process Runtime tetap backend aktif. Embedded opt-in dan tidak pernah default.
 
-## Promotion gates (P2, assessor `gates::assess()`)
+## Gerbang promosi (P2, asesor `gates::assess()`)
 
-| Gate | Status | Evidence |
+| Gerbang | Status | Bukti |
 |---|---|---|
-| `abi_pin` — supported PHP build + ABI matrix | DONE | `abi::AbiPin` pin + matrix tests (8.3/8.4/8.5 NTS non-debug accept; ZTS/Debug/older reject) |
-| `native_link` — real PHP Embed SAPI link | DONE when linked (HOLD stub) | `build.rs` links libphp only on Linux + `PHPX_EMBED_LINK=1`; WSL Debian gates green linked (2026-11-19 and 2026-11-25) |
-| `execution_domain` — controlled domain + thread constraints | DONE | Single-entry `EmbeddedDomain`, 8-thread race = exactly 1 winner, panic poisons gracefully; live engine pinned to one dedicated thread |
-| `ownership` — ownership/lifetime rules across the C ABI | DONE | 5 rules + `RequestScope` tracker, enforced by construction |
-| `containment` — failure containment strategy | DONE | Validate-then-enter-then-cap order, exact 16 MiB cap, junk rejected before entry; live bailouts contained + engine reusable |
-| `extensions` — extension compatibility tests | LIVE (machine-dependent) | `ext::ExtReport::probe()` audits live `php -m` vs the 11-extension doctor matrix; HOLD lists the missing extensions |
-| `isolation` — request state isolation tests | DONE when linked (HOLD stub) | `phpx_embed_next_request` RINIT cycle: `set → cycle → probe` reads clean, `bailout → cycle → clean`; single-`exit` double-RSHUTDOWN corrupts the heap (pinned rule) |
-| `compat_parity` — parity on the compatibility suite | DONE when linked (HOLD stub) | All four sims execute live via `live::serve`: vanilla hello-world, laravel routing+JSON+urlencoded, wordpress loop/search/shortcode+cookies, woocommerce cart/checkout+cookies (contained `exit` → documented status mapping) |
-| `stability` — stability evidence, never throughput alone | DONE when linked + soak archived (HOLD otherwise) | `tests/linked_soak.rs`: 300 mixed evals + request cycles, 6 contained bailouts, 0 failures, RSS +278 KB steady-state (cap 10 MB); archive read back by the gate |
+| `abi_pin` — build PHP + matriks ABI yang didukung | DONE | Pin `abi::AbiPin` + test matriks (8.3/8.4/8.5 NTS non-debug diterima; ZTS/Debug/lama ditolak) |
+| `native_link` — link SAPI PHP Embed asli | DONE bila linked (HOLD bila stub) | `build.rs` me-link libphp hanya di Linux + `PHPX_EMBED_LINK=1`; gerbang WSL Debian hijau linked (2026-11-19 dan 2026-11-25) |
+| `execution_domain` — domain terkendali + batasan thread | DONE | `EmbeddedDomain` entri-tunggal, race 8-thread = tepat 1 pemenang, panic meracuni graceful; engine live di-pin ke satu thread khusus |
+| `ownership` — aturan ownership/lifetime lintas C ABI | DONE | 5 aturan + pelacak `RequestScope`, ditegakkan secara konstruksi |
+| `containment` — strategi containment kegagalan | DONE | Urutan validasi-lalu-masuk-lalu-batasi, cap persis 16 MiB, sampah ditolak sebelum masuk; bailout live terkandung + engine dapat dipakai lagi |
+| `extensions` — test kompatibilitas ekstensi | LIVE (tergantung mesin) | `ext::ExtReport::probe()` mengaudit `php -m` live vs matriks doctor 11-ekstensi; HOLD menyebut ekstensi yang hilang |
+| `isolation` — test isolasi state request | DONE bila linked (HOLD bila stub) | Siklus RINIT `phpx_embed_next_request`: `set → cycle → probe` terbaca bersih, `bailout → cycle → bersih`; `exit` tunggal + RSHUTDOWN ganda merusak heap (aturan dipin) |
+| `compat_parity` — kesetaraan dengan suite kompatibilitas | DONE bila linked (HOLD bila stub) | Keempat sim berjalan live via `live::serve`: vanilla hello-world, laravel routing+JSON+urlencoded, wordpress loop/search/shortcode+cookies, woocommerce cart/checkout+cookies (`exit` terkandung → mapping status terdokumentasi) |
+| `stability` — bukti stabilitas, bukan throughput semata | DONE bila linked + soak terarsip (HOLD bila tidak) | `tests/linked_soak.rs`: 300 eval campuran + siklus request, 6 bailout terkandung, 0 gagal, RSS +278 KB steady-state (cap 10 MB); arsip dibaca balik oleh gerbang |
 
-`available()` is true only when every gate passes — the mechanical promotion
-condition. `runtime inspect --json` exposes the full `gates` array; `phpx
-doctor` keeps its informational php-embed checks.
+`available()` true hanya bila semua gerbang lolos — syarat promosi mekanis.
+`runtime inspect --json` mengekspos array `gates` penuh; `phpx doctor`
+mempertahankan cek php-embed informasionalnya.
 
-## Capabilities
+## Kemampuan
 
-- available=false until every promotion gate passes (derived from
-  `gates::available()`, fail-closed — not a literal).
-- single_threaded=true, max_concurrent_entries=1. The gateway serializes
-  through one engine slot: extra requests wait in a bounded queue
-  (explicit `queue_bound` + `queue_wait_timeout_seconds`, 503 backpressure
-  on full/wait-timeout — same contract as the process pools).
-- nts_only=true (ZTS not claimed).
-- Execution timeout is explicit (`request_timeout_seconds`, 504 on expiry).
-  Asymmetry vs process pools (documented Beta limit): the gateway reports
-  504 within the bound but cannot kill NTS mid-request — the long request
-  runs to completion and later requests queue behind it.
+- available=false hingga semua gerbang promosi lolos (diturunkan dari
+  `gates::available()`, fail-closed — bukan literal).
+- single_threaded=true, max_concurrent_entries=1. Gateway menyerikan lewat
+  satu slot engine: request ekstra menunggu di antrean terbatas
+  (`queue_bound` + `queue_wait_timeout_seconds` eksplisit, backpressure 503
+  saat penuh/kedaluwarsa-tunggu — kontrak sama dengan pool process).
+- nts_only=true (ZTS tidak diklaim).
+- Timeout eksekusi eksplisit (`request_timeout_seconds`, 504 saat kedaluwarsa).
+  Asimetri vs pool process (batas Beta yang didokumentasikan): gateway
+  melaporkan 504 dalam budget tetapi tidak bisa membunuh NTS di tengah
+  request — request panjang jalan hingga selesai dan request berikutnya
+  antre di belakangnya.
 
-## Config
+## Konfig
 
-[runtime.embedded] enabled=false is the default. Set enabled=true plus runtime.mode=embedded to opt in (experimental).
-Validation still rejects mode=embedded without enabled=true. All bounds are
-explicit (serde defaults keep old configs parsing):
+[runtime.embedded] enabled=false adalah default. Set enabled=true plus runtime.mode=embedded untuk opt-in (eksperimental).
+Validasi tetap menolak mode=embedded tanpa enabled=true. Semua bound eksplisit
+(serde default menjaga konfig lama tetap terparse):
 
-- `request_timeout_seconds` (default 30, 1-600): gateway-side execution
-  budget, 504 on expiry (see timeout asymmetry above).
-- `queue_bound` (default auto = 16, 1-100000): bounded wait queue, 503 on full.
-- `queue_wait_timeout_seconds` (default 2, 0-120): bounded wait for the
-  single engine slot, 503 on expiry.
-- `shutdown_drain_timeout_seconds` (default 10, 1-120): graceful drain budget.
+- `request_timeout_seconds` (default 30, 1-600): budget eksekusi sisi-gateway,
+  504 saat kedaluwarsa (lihat asimetri timeout di atas).
+- `queue_bound` (default auto = 16, 1-100000): antrean tunggu terbatas, 503 saat penuh.
+- `queue_wait_timeout_seconds` (default 2, 0-120): tunggu terbatas untuk slot
+  engine tunggal, 503 saat kedaluwarsa.
+- `shutdown_drain_timeout_seconds` (default 10, 1-120): budget drain graceful.
 
 ## CLI
 
-- runtime list shows embedded status experimental-disabled or experimental-enabled plus derived available/linked.
-- runtime inspect includes an embedded object with enabled, available, single_threaded, max_concurrent_entries, abi pin, and the full `gates` array (per-gate pass + evidence).
-- `runtime.mode=embedded` is wired: the gateway builds the single-flight
-  `EmbeddedPool` (pooling + routing + explicit timeouts above) and serves
-  the same routes (direct .php / static / front-controller) through
-  `live::serve_with_timeout`. Stub builds fail closed per request
-  (500, actionable "live engine unavailable" — never hang); linked builds
-  execute live (see `crates/phpx-server/tests/p2_embedded_gateway.rs`).
+- runtime list menampilkan status embedded experimental-disabled atau experimental-enabled plus available/linked turunan.
+- runtime inspect menyertakan objek embedded berisi enabled, available, single_threaded, max_concurrent_entries, pin abi, dan array `gates` penuh (lolos + bukti per gerbang). Bila mode=embedded, field pool (execution_mode, workers, bound, timeout) melaporkan pool embedded, bukan angka process.
+- `runtime.mode=embedded` terkabel: gateway membangun `EmbeddedPool`
+  single-flight (pooling + routing + timeout eksplisit di atas) dan melayani
+  rute yang sama (direct .php / statik / front-controller) melalui
+  `live::serve_with_timeout`. Build stub fail-closed per request
+  (500, "live engine unavailable" yang actionable — tidak pernah hang); build
+  linked mengeksekusi live (lihat `crates/phpx-server/tests/p2_embedded_gateway.rs`).
 
-## Engine lifecycle (P2 gate model, DONE)
+## Siklus hidup engine (model gerbang P2, DONE)
 
-Module `engine`: Cold → Initializing → Ready → Serving → Draining/Shutdown,
-Failed terminal except Shutdown. Pure transition table, unit-tested. Hosting
-a live engine stays closed until the gates above pass; the machine is the
-contract the live engine will obey (only Ready enters, only Serving exits).
+Modul `engine`: Cold → Initializing → Ready → Serving → Draining/Shutdown,
+Failed terminal kecuali Shutdown. Tabel transisi murni, unit-test. Menghosting
+engine live tetap tertutup hingga gerbang di atas lolos; mesin inilah kontrak
+yang akan dipatuhi engine live (hanya Ready yang masuk, hanya Serving yang keluar).
 
-## Isolation lifecycle (P2 gate model, DONE)
+## Siklus hidup isolasi (model gerbang P2, DONE — terbukti live)
 
-Module `isolation`: one `IsolationScope` per request — track every byte
-handed to the engine, release everything before the next entry, seal the
-boundary. A seal over retained bytes fails closed naming the leak. The live
-Zend executor reset plugs into this lifecycle; the gate stays HOLD until a
-hosted engine proves per-request reset.
+Modul `isolation`: satu `IsolationScope` per request — lacak setiap byte yang
+diserahkan ke engine, lepas semuanya sebelum masuk berikutnya, segel batasnya.
+Segel di atas byte yang tertahan fail-closed dengan menyebut bocornya. Reset
+eksekutor Zend live terpasang ke lifecycle ini; reset per-request terbukti
+via siklus RINIT live (`set → cycle → bersih`).
 
-## Extension compatibility (P2 gate, LIVE)
+## Kompatibilitas ekstensi (gerbang P2, LIVE)
 
-Module `ext`: `REQUIRED_EXTENSIONS` (the 11-extension doctor matrix) +
-`ExtReport::audit()` over `php -m` output + `ExtReport::probe()` for the
-live listing. The assessor marks the gate DONE when the local `php -m`
-satisfies the matrix and HOLD naming the missing extensions otherwise.
+Modul `ext`: `REQUIRED_EXTENSIONS` (matriks doctor 11-ekstensi) +
+`ExtReport::audit()` atas output `php -m` + `ExtReport::probe()` untuk listing
+live. Asesor menandai gerbang DONE bila `php -m` lokal memenuhi matriks dan
+HOLD dengan menyebut ekstensi yang hilang bila tidak.
 
-## Deferred (later M6)
+## Ditunda (M6 lanjutan)
 
-- Native php-embed link in CI (gate `native_link`; manual WSL gate proven linked-green, CI stays stub until php-dev headers are available on the runner).
-- Live C ABI bridge execution (`startup`/`execute_once`/`shutdown` against a hosted engine; `call_stub` keeps failing closed until then).
-- Laravel and WordPress compatibility subsets through embedded (gate `compat_parity`; per-subset blockers in the table below).
+- Link php-embed nativ di CI (gerbang `native_link`; gerbang WSL manual terbukti
+  hijau linked, CI tetap stub hingga header php-dev tersedia di runner).
+- Klaim produksi apa pun (armada, multi-node, SLO) — tetap di luar Beta.
 
+## Pin ABI (M6.2 DONE)
 
-## ABI pin (M6.2 DONE)
+Sumber tunggal: modul abi phpx-runtime-embedded (AbiPin).
 
-Single source: phpx-runtime-embedded abi module (AbiPin).
+- PHP yang didukung: 8.3 / 8.4 / 8.5 (prefix match, jadi 8.4.12 cocok dengan 8.4).
+- SAPI: embed saja. Header: sapi/embed/php_embed.h, main/php.h, Zend/zend_API.h.
+- Lib Linux: libphp.so, libphp8.so (pkg php-embed pada instalasi php-dev Debian dan Ubuntu).
+- Hanya NTS, hanya non-debug (PHP_DEBUG=0). Build ZTS dan Debug ditolak dengan error actionable.
+- Catatan mesin dev: PHP 8.3.30 Windows di sini ZTS, jadi cek AbiPin menolaknya by design. Process Runtime tetap aktif.
+- CLI JSON: runtime list dan runtime inspect kini menyertakan embedded.abi dari nilai pin AbiPin.
 
-- Supported PHP: 8.3 / 8.4 / 8.5 (prefix match, so 8.4.12 matches 8.4).
-- SAPI: embed only. Headers: sapi/embed/php_embed.h, main/php.h, Zend/zend_API.h.
-- Linux libs: libphp.so, libphp8.so (pkg php-embed on Debian and Ubuntu php-dev installs).
-- NTS only, non-debug only (PHP_DEBUG=0). ZTS and Debug builds are rejected with actionable errors.
-- Dev machine note: Windows PHP 8.3.30 here is ZTS, so AbiPin check rejects it by design. Process Runtime stays active.
-- CLI JSON: runtime list and runtime inspect now include embedded.abi from AbiPin pinned values.
+## Probe link (M6 Poin 1 DONE)
 
+- Modul link: LinkProbe mem-probe php-config plus php saat runtime, tidak pernah menggagalkan build. found tetap false hingga toolchain php-embed NTS Linux dikabel.
+- build_plan: Linux x86_64 dengan php-dev NTS non-debug 8.3-8.5, include php-config plus lib, tahap link build.rs, pemanggilan narrow bridge, test kontrak menjaga setiap klaim.
+- Link nativ ditunda: box dev Windows tidak punya lib dev php-embed, jadi probe melaporkan langkah actionable alih-alih me-link.
 
-## Link probe (M6 Point 1 DONE)
+## Narrow bridge (M6 Poin 3 DONE) + shim live-eval (P2)
 
-- Module link: LinkProbe probes php-config plus php at runtime, never fails the build. found stays false until a Linux NTS php-embed toolchain is wired.
-- build_plan: Linux x86_64 with php-dev NTS non-debug 8.3-8.5, php-config includes plus libs, build.rs link step, narrow bridge calls, contract tests gate every claim.
-- Native link deferred: Windows dev box has no php-embed dev libs, so probe reports actionable steps instead of linking.
+- Modul bridge, BRIDGE_VERSION=1. Hanya allowlist: startup, execute_once, shutdown. Op tak dikenal ditolak sebelum cek envelope.
+- Header batas C: BridgeRequest plus BridgeResponse dengan repr C. Stub memvalidasi op plus envelope, lalu melaporkan unlinked.
+- `src/engine_shim.c` (hanya build linked): capture ub_write dengan cap 16 MiB, `zend_first_try/catch` di sekitar setiap eval agar fatal longjmp balik alih-alih membunuh host, handoff output per-eval.
+- Semantik eval dari zend_execute_API.c: **bila retval diminta, engine membungkus snippet sebagai `return <code>;` sendiri** — statement lewat dengan retval NULL (`execute_once`: `echo 'x';`, assignment) sedangkan ekspresi telanjang lewat dengan retval (`eval_expr`: `6*7`, bukan `return 6*7;`). Tertukar berujung parse error bersih, bukan crash (dipin oleh test linked).
 
-## Narrow bridge (M6 Point 3 DONE) + live-eval shim (P2)
+## Ownership dan lifecycle (M6 Poin 4 DONE)
 
-- Module bridge, BRIDGE_VERSION=1. Allowlist only: startup, execute_once, shutdown. Unknown ops rejected before envelope checks.
-- C boundary headers: BridgeRequest plus BridgeResponse with repr C. Stub validates op plus envelope, then reports unlinked.
-- `src/engine_shim.c` (linked builds only): ub_write capture with a 16 MiB cap, `zend_first_try/catch` around every eval so a fatal longjmps back instead of killing the host, per-eval output handoff.
-- Eval semantics learned from zend_execute_API.c: **when retval is requested the engine wraps the snippet as `return <code>;` itself** — statements go through with retval NULL (`execute_once`: `echo 'x';`, assignments) while bare expressions go with retval (`eval_expr`: `6*7`, not `return 6*7;`). Mixing them up is a clean parse error, never a crash (pinned by the linked tests).
+- Modul ownership, lima aturan: Rust memiliki buffer, tidak ada pointer lintas request, handle engine hidup satu request, entri konkuren ditolak sebelum alokasi, oversize ditolak sebelum alokasi.
+- RequestScope melacak byte per request dan Drop menutup scope.
 
-## Ownership and lifecycle (M6 Point 4 DONE)
+## Matriks NTS dan ZTS (M6 Poin 6 DONE)
 
-- Module ownership, five rules: Rust owns buffers, no pointers cross requests, engine handles live one request, concurrent entry rejected before allocation, oversize rejected before allocation.
-- RequestScope tracks bytes per request and Drop closes the scope.
-
-## NTS and ZTS matrix (M6 Point 6 DONE)
-
-- NTS only, non-debug only. ZTS plus Debug rejected with actionable errors.
+- Hanya NTS, hanya non-debug. ZTS plus Debug ditolak dengan error actionable.
 
 | PHP | NTS non-debug | ZTS | Debug | Status |
 |-----|---------------|-----|-------|--------|
-| 8.3 | ok | rejected | rejected | pin active, link deferred |
-| 8.4 | ok | rejected | rejected | pin active, link deferred |
-| 8.5 | ok | rejected | rejected | pin active, link deferred |
-| 8.2 and older | rejected | rejected | rejected | unsupported |
+| 8.3 | ok | ditolak | ditolak | pin aktif, terbukti linked via gerbang manual |
+| 8.4 | ok | ditolak | ditolak | pin aktif |
+| 8.5 | ok | ditolak | ditolak | pin aktif |
+| 8.2 dan lebih tua | ditolak | ditolak | ditolak | tidak didukung |
 
-## Compat subsets (M6 Point 9 DONE)
+## Subset kompatibilitas (M6 Poin 9 DONE — live via serve path)
 
-- Module compat mirrors M4 fixtures: vanilla, laravel-minimal, wordpress-minimal, woocommerce-minimal.
-- run_subset_stub validates subset id plus envelope, then reports deferred. Same subsets stay green through process runtime today.
+- Modul compat mencerminkan fixture M4: vanilla, laravel-minimal, wordpress-minimal, woocommerce-minimal.
+- Keempat subset berjalan LIVE via `live::serve` pada build linked (dipin oleh `linked_parity`); stub melaporkan deferred. Subset yang sama tetap hijau lewat process runtime.
 
-## Containment and limits (M6 Point 10 DONE + linked-mode gate 2026-11-19)
+## Containment dan batas (M6 Poin 10 DONE + gerbang linked-mode 2026-11-19)
 
-Gate run (WSL Debian, php-config 8.3.36 NTS, PHPX_EMBED_LINK=1, libphp linked):
-`cargo test -p phpx-runtime-embedded` = 27 lib + 12 contract, all green WITH libphp
-linked. Proves the gates hold in linked mode, not only in stub mode:
+Run gerbang (WSL Debian, php-config 8.3.36 NTS, PHPX_EMBED_LINK=1, libphp ter-link):
+`cargo test -p phpx-runtime-embedded` = 27 lib + 12 kontrak, semua hijau DENGAN libphp
+ter-link. Membuktikan gerbang bertahan dalam mode linked, bukan hanya mode stub
+(rekaman historis; run 2026-11-24/25 di bawah ini yang kini berlaku):
 
-- Panic inside the domain poisons the mutex, gateway thread survives, next
-  entry reports graceful `poisoned` error (no hang, no crash).
-- Body exactly 16 MiB passes the size check (no off-by-one); 16 MiB + 1 is
-  rejected naming MAX_FRAME_BYTES.
-- Junk envelope is rejected BEFORE domain entry (single-entry domain cannot
-  be exhausted by malformed frames).
-- Clean guard release allows re-entry (no deadlock).
-- 8-thread race still yields exactly 1 winner under linked build.
-- `execute_guarded` hold message is link-aware: linked=true reports
-  "engine entry closed until M6 gates pass", stub reports "not linked".
+- Panic di dalam domain meracuni mutex, thread gateway selamat, entri berikut
+  melaporkan error `poisoned` yang graceful (tanpa hang, tanpa crash).
+- Body tepat 16 MiB lolos cek ukuran (tanpa off-by-one); 16 MiB + 1 ditolak
+  dengan menyebut MAX_FRAME_BYTES.
+- Envelope sampah ditolak SEBELUM masuk domain (domain entri-tunggal tidak
+  bisa dihabiskan oleh frame malformed).
+- Rilis guard yang bersih memungkinkan masuk ulang (tanpa deadlock).
+- Race 8-thread tetap menghasilkan tepat 1 pemenang pada build linked.
 
-## Containment and limits (M6 Point 10 DONE)
+## Containment dan batas (M6 Poin 10 DONE)
 
-- Module containment, ResourceLimits standard: max_frame_bytes 16 MiB, max_wall_ms 30000, single_entry true.
-- Order: validate envelope, enter single-entry domain, enforce size cap, then report unlinked. Gateway never hosts a live engine in this build, so a crash cannot take it down.
-- Stress proof: 8 threads racing try_enter yields exactly 1 winner.
+- Modul containment, ResourceLimits standar: max_frame_bytes 16 MiB, max_wall_ms 30000, single_entry true.
+- Urutan: validasi envelope, masuk domain entri-tunggal, tegakkan cap ukuran. Gerbang tidak pernah menghosting engine live dalam build stub, jadi crash tidak bisa menjatuhkannya.
+- Bukti stres: 8 thread berlomba try_enter menghasilkan tepat 1 pemenang.
 
-## Supported build matrix (M6 exit DONE)
+## Matriks build yang didukung (M6 exit DONE)
 
 | OS | PHP | Thread safety | Status |
 |----|-----|---------------|--------|
-| Linux x86_64 | 8.3-8.5 NTS non-debug | NTS | target for future native link, deferred in v0.1 |
-| Linux x86_64 | ZTS or Debug | ZTS or Debug | rejected by AbiPin |
-| Windows x64 | 8.3.30 ZTS dev box | ZTS | rejected by AbiPin, process runtime active |
-| Docker bookworm | php:8.4 NTS CLI | NTS CLI | process runtime only, embed deferred |
+| Linux x86_64 | 8.3-8.5 NTS non-debug | NTS | terbukti linked via gerbang manual (CI tetap stub) |
+| Linux x86_64 | ZTS atau Debug | ZTS atau Debug | ditolak oleh AbiPin |
+| Windows x64 | 8.3.30 ZTS dev box | ZTS | ditolak oleh AbiPin, process runtime aktif |
+| Docker bookworm | php:8.4 NTS CLI | NTS CLI | hanya process runtime |
 
-## Linked gate run (WSL Debian, 2026-11-24, P2 gates)
+## Run gerbang linked (WSL Debian, 2026-11-24/25, gerbang P2)
 
-- Toolchain: php-config 8.3.36 NTS + `/usr/include/php/20230831/sapi/embed/php_embed.h` + `libphp.so`; build log: `linked php-embed (php-config 8.3.36, libs=["php8.3", ...])`.
-- `PHPX_EMBED_LINK=1 cargo test -p phpx-runtime-embedded` = **42 lib + 16 contract + 8 linked-engine + 3 linked-parity + 1 linked soak, all green WITH libphp linked** (was 28 + 12 on 2026-11-19; stub builds run 42 + 17 with linked-only tests compiled out).
-- First live executions through the narrow bridge: boot, `6*7 = 42`, echo output capture, shared-executor leak pinned, request-cycle isolation (`set → cycle → clean`), vanilla fixture parity (`hello from phpx vanilla|rid=direct`), bailout containment + engine reuse, bailout → cycle recovery — all green, default parallel test threads (single dedicated engine thread; touching the engine from different OS threads trips Zend stack tracking after a bailout).
-- Soak record (`data/bench/soak-embed-latest/SUMMARY.json`, gitignored): 300 mixed evals + 30 request cycles, 307 clean, 6 bailouts contained, 0 failures, RSS +278 KB steady-state (cap 10 MB, post-warmup) in ~1.3 s — the stability gate reads this archive back (test asserts the flip end to end).
-- Live `gates::assess()` on the linked build: **9 PASS, `available=true`**. The gates are honest: stub builds report HOLD + `available=false`; a linked build without a soak archive reports 8/9 + `available=false`.
-  - PASS: `abi_pin`, `native_link`, `execution_domain`, `ownership`, `containment`, `extensions` (live `php -m` 11/11 on the NTS build), `isolation` (request-cycle reset proven live), `stability` (soak archive valid), `compat_parity` (all four sims live: vanilla hello-world, laravel routing+JSON incl. contained `exit`, wordpress loop/search/shortcode, woocommerce cart/checkout incl. contained `exit`).
-- What `available=true` means: the runtime is proven capable (isolated requests, contained failures, stable under soak, app parity on the sim suite). The gateway defaults to `process`; select `runtime.mode=embedded` (+ `enabled=true`) to serve through the single-flight embedded pool — pooling, routing and explicit timeouts are wired (P2 serve path DONE, `p2_embedded_gateway.rs` green on stub and linked). No code changes were needed for the flip itself — `available()` derives from the assessor.
+- Toolchain: php-config 8.3.36 NTS + `/usr/include/php/20230831/sapi/embed/php_embed.h` + `libphp.so`; log build: `linked php-embed (php-config 8.3.36, libs=["php8.3", ...])`.
+- `PHPX_EMBED_LINK=1 cargo test -p phpx-runtime-embedded` = **42 lib + 16 kontrak + 8 linked-engine + 3 linked-parity + 1 linked soak, semua hijau DENGAN libphp ter-link** (dulu 28 + 12 pada 2026-11-19; build stub menjalankan 42 + 17 dengan test khusus-linked dikompilasi keluar).
+- Eksekusi live pertama lewat narrow bridge: boot, `6*7 = 42`, capture output echo, leak shared-executor dipin, isolasi siklus-request (`set → cycle → bersih`), paritas fixture vanilla (`hello from phpx vanilla|rid=direct`), containment bailout + reuse engine, recovery bailout → cycle — semua hijau, thread test paralel default (satu thread engine khusus; menyentuh engine dari thread OS berbeda merusak pelacakan stack Zend setelah bailout).
+- Rekaman soak (`data/bench/soak-embed-latest/SUMMARY.json`, di-gitignore): 300 eval campuran + 30 siklus request, 307 bersih, 6 bailout terkandung, 0 gagal, RSS +278 KB steady-state (cap 10 MB, pasca-warmup) dalam ~1,3 dtk — gerbang stabilitas membaca arsip ini balik (test menegaskan flip-nya end to end).
+- `gates::assess()` live pada build linked: **9 PASS, `available=true`**. Gerbang jujur: build stub melaporkan HOLD + `available=false`; build linked tanpa arsip soak melaporkan 8/9 + `available=false`.
+  - PASS: `abi_pin`, `native_link`, `execution_domain`, `ownership`, `containment`, `extensions` (live `php -m` 11/11 pada build NTS), `isolation` (reset siklus-request terbukti live), `stability` (arsip soak valid), `compat_parity` (keempat sim live: vanilla hello-world, laravel routing+JSON termasuk `exit` terkandung, wordpress loop/search/shortcode, woocommerce cart/checkout termasuk `exit` terkandung).
+- Arti `available=true`: runtime terbukti mampu (request terisolasi, kegagalan terkandung, stabil di bawah soak, paritas app pada suite sim). Gateway default ke `process`; pilih `runtime.mode=embedded` (+ `enabled=true`) untuk melayani lewat pool embedded single-flight — pooling, routing dan timeout eksplisit terkabel (P2 serve path DONE, `p2_embedded_gateway.rs` hijau di stub dan linked). Tidak ada perubahan kode yang dibutuhkan untuk flip itu sendiri — `available()` diturunkan dari asesor.
 
-## Live execution (P2 milestone, WSL-proven)
+## Eksekusi live (milestone P2, terbukti WSL)
 
-`tests/linked_engine.rs` (linked builds only) drives the real engine through
-the narrow bridge — the first live PHPX embedded executions:
+`tests/linked_engine.rs` (hanya build linked) menggerakkan engine asli lewat
+narrow bridge — eksekusi embedded live PHPX pertama:
 
-- boot: engine inits once per process (`phpx_embed_startup` idempotent).
-- expression eval: `eval_expr("6*7")` returns long `42`.
-- output capture: `execute_once("echo 'hello-live';")` returns the bytes
-  (ub_write override targets the global `sapi_module` copy — overriding
-  `php_embed_module` post-startup is a silent no-op because `sapi_startup()`
-  copies the struct).
-- shared-executor reality without a cycle: sequential evals share one
-  executor, so `$GLOBALS` set in eval N is visible in eval N+1 by design
-  (pinned `leak`).
-- request cycle (`phpx_embed_next_request`, balanced RINIT pair): shutdown +
-  startup hands back a fresh executor — `set → cycle → probe` reads `clean`
-  and stays clean across bailouts (`bailout → cycle → clean`). This is the
-  per-request isolation primitive the isolation gate is built on.
-  NEVER add an extra `request_shutdown` before `php_embed_shutdown`: it
-  already performs exactly one RSHUTDOWN, and the unbalanced extra one
-  corrupts the heap at teardown (observed in the C probe, pinned as a rule
-  in the shim).
-- FFI contract learned from `zend_execute_API.c`: with retval requested the
-  engine wraps the snippet as `return <code>;` itself — statements go
-  retval-NULL, bare expressions go with retval. Mixing them is a clean
-  parse error, never memory unsafety.
-- bailout containment: `live_bailout_contained_host_survives` pins that an
-  uncaught exception longjmps back to status 1 with the host alive and the
-  engine reusable on the next eval (`Fatal error: Uncaught Exception` printed,
-  process survives, `7*6` returns `42` right after), plus
-  `live_bailout_then_cycle_recovers_cleanly` (cycle after a fatal).
-- stability soak: `tests/linked_soak.rs` runs 300 mixed evals (expression +
-  echo + cycles every 10 + contained bailout with immediate reuse every 50 +
-  final vanilla parity include), asserting 0 unexpected failures and RSS
-  growth within cap, archiving `SUMMARY.json` + `rss.csv` under gitignored
-  `data/bench/soak-embed-<ts>/` plus the `soak-embed-latest` copy the
-  stability gate reads back (the test asserts the flip end to end).
-  `PHPX_EMBED_SOAK_DIR` overrides the archive dir; the gate also accepts
-  `PHPX_EMBED_SOAK_RECORD` for the file.
-- threading rule (proven the hard way): the NTS engine is pinned to ONE
-  dedicated OS thread for the whole process (`tests/linked_engine.rs`
-  routes every eval through a single engine thread). Parallel cargo tests
-  that touched the engine from different threads tripped Zend stack
-  tracking after a bailout (spurious "Maximum call stack size" on other
-  threads' stacks) — serial passes, parallel failed, dispatcher fixed it.
-  This mirrors the production constraint (single-entry domain) and the
-  future server integration shape: one engine thread, never the gateway
-  workers' threads.
+- boot: engine init sekali per proses (`phpx_embed_startup` idempoten).
+- eval ekspresi: `eval_expr("6*7")` mengembalikan long `42`.
+- capture output: `execute_once("echo 'hello-live';")` mengembalikan byte-nya
+  (override ub_write menarget salinan `sapi_module` global — meng-override
+  `php_embed_module` pasca-startup adalah no-op diam karena `sapi_startup()`
+  menyalin struct).
+- realitas shared-executor tanpa siklus: eval berurutan berbagi satu eksekutor,
+  jadi `$GLOBALS` yang di-set di eval N terlihat di eval N+1 by design
+  (dipin `leak`).
+- siklus request (`phpx_embed_next_request`, pasangan RINIT seimbang): shutdown +
+  startup menyerahkan eksekutor fresh — `set → cycle → probe` terbaca `clean`
+  dan tetap bersih lintas bailout (`bailout → cycle → clean`). Inilah primitif
+  isolasi per-request tempat gerbang isolasi dibangun.
+  JANGAN pernah tambah `request_shutdown` ekstra sebelum `php_embed_shutdown`: ia
+  sudah melakukan tepat satu RSHUTDOWN, dan tambahan yang tak seimbang merusak
+  heap saat teardown (teramati di probe C, dipin sebagai aturan di shim).
+- Kontrak FFI dari `zend_execute_API.c`: dengan retval diminta, engine
+  membungkus snippet sebagai `return <code>;` sendiri — statement lewat
+  retval-NULL, ekspresi telanjang lewat dengan retval. Tertukar berujung parse
+  error bersih, bukan memory unsafety.
+- containment bailout: `live_bailout_contained_host_survives` mem-pin bahwa
+  exception tak tertangkap longjmp balik ke status 1 dengan host hidup dan
+  engine dapat dipakai lagi pada eval berikut (`Fatal error: Uncaught Exception`
+  tercetak, proses selamat, `7*6` mengembalikan `42` tepat setelahnya), plus
+  `live_bailout_then_cycle_recovers_cleanly` (siklus setelah fatal).
+- soak stabilitas: `tests/linked_soak.rs` menjalankan 300 eval campuran (ekspresi +
+  echo + siklus tiap 10 + bailout terkandung dengan reuse segera tiap 50 +
+  include paritas vanilla final), menegaskan 0 kegagalan tak terduga dan
+  pertumbuhan RSS dalam cap, mengarsipkan `SUMMARY.json` + `rss.csv` di bawah
+  `data/bench/soak-embed-<ts>/` yang di-gitignore plus salinan
+  `soak-embed-latest` yang dibaca balik gerbang stabilitas (test menegaskan
+  flip-nya end to end).
+  `PHPX_EMBED_SOAK_DIR` meng-override direktori arsip; gerbang juga menerima
+  `PHPX_EMBED_SOAK_RECORD` untuk filenya.
+- aturan threading (terbukti dengan cara keras): engine NTS di-pin ke SATU
+  thread OS khusus untuk seluruh proses (`tests/linked_engine.rs` merutekan
+  setiap eval lewat satu thread engine). Test cargo paralel yang menyentuh
+  engine dari thread berbeda menjegal pelacakan stack Zend setelah bailout
+  ("Maximum call stack size" palsu di stack thread lain) — serial lolos,
+  paralel gagal, dispatcher memperbaikinya. Ini mencerminkan batasan produksi
+  (domain entri-tunggal).
 
-The isolation + compat_parity + stability gates stay HOLD until per-request
-reset, subset parity, and an archived soak land — `available()` remains
-fail-closed.
+Isolasi + compat_parity + stabilitas kini PASS pada build linked (arsip soak +
+paritas subset + reset per-request mendarat) — `available()` fail-closed hanya
+pada build stub.
 
-## WSL gate verification (M6 gates, 2026-11-19, WSL Debian)
+## Verifikasi gerbang WSL (gerbang M6, 2026-11-19, WSL Debian — historis)
 
-- G1 NTS: php -i shows Thread Safety disabled, Debug Build no, Zend Extension Build API420230831,NTS. PASS (NTS non-debug).
-- G2 toolchain (after sudo apt-get install -y php8.3-dev libphp8.3-embed):
+- G1 NTS: php -i menunjukkan Thread Safety disabled, Debug Build no, Zend Extension Build API420230831,NTS. PASS (NTS non-debug).
+- G2 toolchain (setelah sudo apt-get install -y php8.3-dev libphp8.3-embed):
   - php-config --version => 8.3.36
-  - /usr/include/php/20230831/sapi/embed/php_embed.h present
+  - /usr/include/php/20230831/sapi/embed/php_embed.h ada
   - ldconfig -p | grep libphp => libphp.so => /lib/libphp.so. PASS.
-- G3 contracts: cargo test -p phpx-runtime-embedded => 12 passed, 0 failed on Linux. PASS.
+- G3 kontrak: cargo test -p phpx-runtime-embedded => 12 passed, 0 failed di Linux. PASS.
 - G4 CLI:
-  - phpx runtime list => process active (workers=4), embedded experimental-disabled (available=false, linked=false, single-threaded, max_entries=1); php target 8.4 | actual PHP 8.3.36 NTS.
-  - phpx runtime inspect --json => embedded available false, enabled false, single_threaded true, max_concurrent_entries 1, abi sapi embed nts_only true. PASS (honest stub, no overclaim).
+  - phpx runtime list => process aktif (workers=4), embedded experimental-disabled (available=false, linked=false, single-threaded, max_entries=1); php target 8.4 | aktual PHP 8.3.36 NTS.
+  - phpx runtime inspect --json => embedded available false, enabled false, single_threaded true, max_concurrent_entries 1, abi sapi embed nts_only true. PASS (stub jujur, tanpa overclaim).
 
-## Opt-in native link (experimental, never default)
+## Opt-in native link (eksperimental, tidak pernah default)
 
-- Default build stays stub: cargo build -p phpx-runtime-embedded => linked=false, available=false. Windows and ZTS boxes stay green.
-- Linux NTS only:
+- Build default tetap stub: cargo build -p phpx-runtime-embedded => linked=false, available=false. Box Windows dan ZTS tetap hijau.
+- Hanya Linux NTS:
   - sudo apt-get install -y php8.3-dev libphp8.3-embed (php8.4: php8.4-dev libphp8.4-embed)
   - PHPX_EMBED_LINK=1 cargo build -p phpx-runtime-embedded
   - PHPX_EMBED_LINK=1 cargo test -p phpx-runtime-embedded
-- build.rs never fails the build. On missing toolchain, version mismatch, or non-linux TARGET it emits cargo:warning and stays stub.
-- Even when linked=true, available stays false in v0.1 until compat, isolation, and stability gates pass. Docker stays process-runtime-only with embed deferred.
-- OTel stays OTel-ready (traceparent passthrough + JSON logs), not OTLP exporter. cgroup and OS limits stay operator duty (Docker --cpus/--memory, systemd MemoryMax/CPUQuota).
+- build.rs tidak pernah menggagalkan build. Pada toolchain hilang, mismatch versi, atau TARGET non-linux ia mengemis cargo:warning dan tetap stub.
+- Bila linked=true, `available` mengikuti asesor gerbang (9/9 PASS + arsip soak). Docker tetap process-runtime-only.
+- OTel tetap OTel-ready (passthrough traceparent + JSON log), bukan exporter OTLP. Batas cgroup dan OS tetap tugas operator (Docker --cpus/--memory, systemd MemoryMax/CPUQuota).
 
-## Opsi-2 compat explicit (2026-11-19, DONE)
+## Kompat Opsi-2 eksplisit (2026-11-19, DONE — live sejak serve path P2)
 
-No vague deferral: each embedded subset now names its green process fixture
-AND its exact M6 blocker (compat.rs Subset.process_fixture + embedded_blocker).
+Tidak ada penundaan samar: setiap subset embedded kini menyebut fixture process
+hijau-nya DAN status M6-nya (compat.rs Subset.process_fixture + embedded_blocker).
 
-| Subset | Process fixture (green today) | Embedded status (M6 gate) |
+| Subset | Fixture process (hijau hari ini) | Status embedded (gerbang M6) |
 |--------|-------------------------------|----------------------------|
-| vanilla | examples/vanilla-php (m4_compat: isolation + crash-recovery green) | LIVE via `live::serve` on linked builds (pinned by `linked_parity`); stub reports deferred |
-| laravel-minimal | examples/laravel-minimal (m4_compat: routing + JSON green) | LIVE via `live::serve` on linked builds (routing + JSON + urlencoded body + cookies); stub reports deferred |
-| wordpress-minimal | examples/wordpress-minimal (m4_compat: loop + search + shortcode green) | LIVE via `live::serve` on linked builds (`?p`/`?s` + cookies); stub reports deferred |
-| woocommerce-minimal | examples/woocommerce-minimal (m4_compat: cart + checkout JSON green) | LIVE via `live::serve` on linked builds (`?add_to_cart` + checkout JSON); stub reports deferred |
+| vanilla | examples/vanilla-php (m4_compat: isolasi + crash-recovery hijau) | LIVE via `live::serve` pada build linked (dipin oleh `linked_parity`); stub melaporkan deferred |
+| laravel-minimal | examples/laravel-minimal (m4_compat: routing + JSON hijau) | LIVE via `live::serve` pada build linked (routing + JSON + body urlencoded + cookies); stub melaporkan deferred |
+| wordpress-minimal | examples/wordpress-minimal (m4_compat: loop + search + shortcode hijau) | LIVE via `live::serve` pada build linked (`?p`/`?s` + cookies); stub melaporkan deferred |
+| woocommerce-minimal | examples/woocommerce-minimal (m4_compat: cart + checkout JSON hijau) | LIVE via `live::serve` pada build linked (`?add_to_cart` + checkout JSON); stub melaporkan deferred |
 
-Link-aware deferral: run_subset_stub keeps substring 'deferred' in both modes
-so contract stays stable. linked=true reports 'engine entry closed until M6
-gates pass', stub reports 'not linked'. Same subset stays green through
-process runtime.
+Deferral yang link-aware: run_subset_stub tetap mengandung substring 'deferred' di kedua mode
+agar kontrak stabil. Stub melaporkan 'not linked'; subset yang sama tetap hijau
+lewat process runtime.
 
-Gate runs 2026-11-19:
-- Windows (ZTS dev box, stub): cargo test -p phpx-runtime-embedded = 28 lib + 12 contract, all green.
-- WSL Debian (php-config 8.3.36 NTS, PHPX_EMBED_LINK=1, libphp linked): cargo test -p phpx-runtime-embedded = 28 lib + 12 contract, all green.
-- WSL process compat: cargo test -p phpx-server --test m4_compat = 5 passed (vanilla, composer, laravel, wp+woo, metrics).
-- runtime inspect (Windows): embedded linked=false, available=false, enabled=false. Honest stub, no overclaim.
+Run gerbang 2026-11-19 (historis):
+- Windows (ZTS dev box, stub): cargo test -p phpx-runtime-embedded = 28 lib + 12 kontrak, semua hijau.
+- WSL Debian (php-config 8.3.36 NTS, PHPX_EMBED_LINK=1, libphp ter-link): cargo test -p phpx-runtime-embedded = 28 lib + 12 kontrak, semua hijau.
+- Kompat process WSL: cargo test -p phpx-server --test m4_compat = 5 passed (vanilla, composer, laravel, wp+woo, metrics).
+- runtime inspect (Windows): embedded linked=false, available=false, enabled=false. Stub jujur, tanpa overclaim.
+
+## Serve path gateway (P2, DONE 2026-11-25)
+
+`runtime.mode=embedded` terkabel end-to-end: gateway membangun `EmbeddedPool`
+single-flight (`crates/phpx-worker/src/embedded.rs` — antrean terbatas +
+timeout eksplisit, kontrak 503/500/504 sama dengan pool process) dan merutekan
+rute yang sama (direct .php / statik / front-controller) lewat
+`live::serve_with_timeout`. Timeout eksekusi eksplisit: gateway menunggu reply
+engine maksimal `request_timeout_seconds` lalu 504 dalam budget; request panjang
+tidak bisa di-kill mid-request (batas Beta NTS yang didokumentasikan) dan
+antrean menunggu di belakangnya. `runtime inspect`/`list` melaporkan pool
+embedded bila mode=embedded. Bukti: `p2_embedded_gateway` 5/5 hijau di stub
+(fail-closed) dan linked (live 200 + routing).

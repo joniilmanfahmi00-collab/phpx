@@ -1,57 +1,59 @@
 # PHPX
 
-**A Rust-powered PHP application platform.**
+**Platform aplikasi PHP bertenaga Rust.**
 
-PHPX aims to provide a unified runtime and infrastructure platform for
-existing PHP applications, with a Rust control plane and a hybrid PHP
-execution architecture.
+PHPX bertujuan menyediakan runtime terpadu dan platform infrastruktur untuk
+aplikasi PHP yang sudah ada, dengan bidang kendali Rust dan arsitektur
+eksekusi PHP hibrida.
 
-## Project direction
+## Arah proyek
 
--   **Product:** PHPX
--   **Language:** Rust
--   **Deployment:** Native Linux and Docker
--   **Compatibility:** Strict baseline; ordinary PHP applications should
-    not require source changes
--   **Runtime:** Hybrid Process Runtime and experimental Embedded
-    Runtime
--   **Initial integrations:** Vanilla PHP, Laravel, WordPress
+-   **Produk:** PHPX
+-   **Bahasa:** Rust
+-   **Deployment:** Linux nativ dan Docker
+-   **Kompatibilitas:** Baseline ketat; aplikasi PHP biasa tidak boleh
+    membutuhkan perubahan sumber
+-   **Runtime:** Hybrid Process Runtime dan Embedded Runtime eksperimental
+-   **Integrasi awal:** Vanilla PHP, Laravel, WordPress, WooCommerce
 
 ## Status
 
-**PHPX v0.1 developer preview** - useful minimal PHP application server (M1-M3 complete).
-Not a production SLA. See `docs/operations/limitations.md`.
+**PHPX v0.1 developer preview** — server aplikasi PHP minimal yang berguna
+(M1-M5 + P0-P2 selesai; serve path embedded terkabel, opt-in).
+Bukan SLA produksi. Lihat `docs/operations/limitations.md`.
 
-Quickstarts:
+Bukti terbaru (2026-11-25): soak 6 jam persistent/release — 73.600/73.600
+request, gagal 0, RSS gateway flat (slope -0,86 KB/menit). Lihat
+`docs/operations/soak.md` dan `docs/operations/release-gates.md`.
 
-- Native Linux: `docs/operations/quickstart-linux.md`
+Quickstart:
+
+- Linux nativ: `docs/operations/quickstart-linux.md`
 - Docker (non-root): `docs/operations/quickstart-docker.md`
-- Config defaults: `docs/operations/configuration.md`
-- PHP matrix: `docs/operations/php-version-matrix.md`
+- Default config: `docs/operations/configuration.md`
+- Matriks PHP: `docs/operations/php-version-matrix.md`
 - systemd: `docs/operations/systemd.md` + `packaging/systemd/phpx.service`
 
 Health: `GET /healthz` (liveness), `GET /readyz` (readiness). CLI: `phpx doctor`, `phpx serve`, `phpx runtime list|inspect`, `phpx workers status|reload`, `phpx metrics`.
 
-## Documentation
+## Dokumentasi
 
--   [Technical Specification v0.1](docs/TECHNICAL_SPEC_v0.1.md)
+-   [Spesifikasi Teknis v0.1](docs/TECHNICAL_SPEC_v0.1.md)
 -   [Roadmap](roadmap.md)
--   [Architecture Decision Records](docs/adr/README.md)
--   [Release gates assessment](docs/operations/release-gates.md)
--   [Benchmark report (English, developer edition)](docs/PHPX-v0.1.0-rc1-benchmark-report-en.md)
--   TODO: attach release PDF rendition (export the English report to PDF at release time)
+-   [Catatan Keputusan Arsitektur](docs/adr/README.md)
+-   [Penilaian gerbang rilis](docs/operations/release-gates.md)
+-   [Laporan benchmark (Inggris, edisi developer)](docs/PHPX-v0.1.0-rc1-benchmark-report-en.md)
 
-## Initial development principles
+## Prinsip pengembangan awal
 
-1.  Process Runtime first.
-2.  Embedded Runtime remains experimental until proven safe and
-    compatible.
-3.  PHP stays the application language.
-4.  Rust manages infrastructure and lifecycle.
-5.  Bound all queues, workers, and resource usage.
-6.  Test real PHP applications, not only synthetic benchmarks.
+1.  Process Runtime dulu.
+2.  Embedded Runtime tetap eksperimental hingga terbukti aman dan
+    kompatibel.
+3.  PHP tetap bahasa aplikasi.
+4.  Rust mengelola infrastruktur dan lifecycle.
+5.  Batasi semua antre, worker, dan pemakaian resource.
+6.  Uji aplikasi PHP asli, bukan hanya benchmark sintetis.
 
-## License
+## Lisensi
 
-MIT License — see `LICENSE`.
-
+MIT License — lihat `LICENSE`.

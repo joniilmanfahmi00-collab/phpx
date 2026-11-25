@@ -1,86 +1,85 @@
-# Persistent worker contract (P0-A defined, P0-B implemented)
+# Kontrak worker persistent (P0-A didefinisikan, P0-B terimplementasi)
 
-Status: **Implemented.** `execution_mode = "persistent"` selects the fixed-size
-supervised pool (`PersistentPool`); `execution_mode = "one-shot"` (default)
-keeps the one-shot throttle. Both report via CLI/JSON and
+Status: **Terimplementasi.** `execution_mode = "persistent"` memilih pool terawasi berukuran-tetap (`PersistentPool`); `execution_mode = "one-shot"` (default)
+mempertahankan throttle one-shot. Keduanya dilaporkan via CLI/JSON dan
 `phpx_execution_mode_info`.
 
-## 1. Modes
+## 1. Mode
 
-| Mode | Meaning | Status |
+| Mode | Arti | Status |
 |------|---------|--------|
-| `one-shot` | One fresh `php` process per admitted request (`execute_one_shot`). No cross-request state by construction. | Implemented (M1, hardened M4) |
-| `persistent` | Fixed-size pool of long-lived supervised PHP workers with identity, handshake, recycling. | Deferred to P0-B; configuring it fails with an actionable error |
+| `one-shot` | Satu proses `php` baru per request yang diterima (`execute_one_shot`). Tanpa state lintas-request secara konstruksi. | Terimplementasi (M1, dikeraskan M4) |
+| `persistent` | Pool tetap berisi worker PHP berumur-panjang yang terawasi dengan identitas, handshake, recycling. | Terimplementasi (P0-B) |
 
-## 2. Identity
+## 2. Identitas
 
-- `worker_id: u64` — stable slot index across restarts (see `WorkerIdentity` in `phpx-runtime`).
-- `incarnation: u64` — bumps every time the OS process for a slot is (re)spawned.
-- `pid: Option<u32>` — live OS process handle while supervised; `None` before spawn / after reaping.
-- A logical recycle counter alone (today's `recycled`) is **not** a process recycle;
-  P0-B must tie recycling to a new incarnation + fresh PID.
+- `worker_id: u64` — indeks slot stabil antar restart (lihat `WorkerIdentity` di `phpx-runtime`).
+- `incarnation: u64` — naik setiap kali proses OS untuk sebuah slot di-(re)spawn.
+- `pid: Option<u32>` — handle proses OS yang hidup saat diawasi; `None` sebelum spawn / setelah reaping.
+- Counter recycle logis saja (`recycled` saat ini) **bukan** recycle proses;
+  P0-B wajib mengikat recycling ke incarnation baru + PID baru.
 
-## 3. Transport and protocol
+## 3. Transport dan protokol
 
-- Envelope: `PhpRequest` / `PhpResponse` JSON with `protocol_version` (current `1`, see `phpx-runtime::PROTOCOL_VERSION`).
+- Envelope: JSON `PhpRequest` / `PhpResponse` dengan `protocol_version` (saat ini `1`, lihat `phpx-runtime::PROTOCOL_VERSION`).
 - Framing: 4-byte big-endian length + JSON (`encode_frame` / `decode_frame` / `write_frame`).
-  Prototype transport is stdio pipes; Unix-socket transport lands with P0-B.
-- Breaking envelope changes bump `PROTOCOL_VERSION`; supervisor and worker must
-  agree, else the request fails with a protocol error instead of executing.
-- Blocking PHP execution **never** runs on Tokio executor threads: the gateway
-  dispatches via `tokio::task::spawn_blocking` (ADR-0006). P0-B keeps this rule
-  for handshake, I/O pump, and supervision waits.
+  Transport prototipe adalah stdio pipes; transport Unix-socket hadir bersama P0-B.
+- Perubahan envelope yang breaking menaikkan `PROTOCOL_VERSION`; supervisor dan worker wajib
+  sepakat, jika tidak request gagal dengan error protokol alih-alih dieksekusi.
+- Eksekusi PHP yang blocking **tidak pernah** berjalan di thread eksekutor Tokio: gateway
+  mendispatch via `tokio::task::spawn_blocking` (ADR-0006). P0-B mempertahankan aturan ini
+  untuk handshake, pompa I/O, dan supervision waits.
 
-## 4. Lifecycle (P0-B target, not yet code)
+## 4. Siklus hidup (P0-B terimplementasi; dipin oleh test lifecycle)
 
 `Starting -> Ready -> Busy -> Ready`, plus `Ready -> Draining -> Stopped`,
 `Busy -> Draining -> Stopped`, `Busy -> Unhealthy -> Restarting -> Ready`,
-`Starting -> Failed`. Replacement becomes ready only after a successful
-startup handshake inside `startup_timeout_seconds`.
+`Starting -> Failed`. Pengganti menjadi ready hanya setelah handshake
+startup yang sukses di dalam `startup_timeout_seconds`.
 
-## 5. Which applications can use persistent mode
+## 5. Aplikasi mana yang bisa memakai mode persistent
 
-None yet beyond fixtures — persistent mode is selectable since P0-B and
-eligibility starts with stateless vanilla PHP (proven: reuse, crash recovery,
-timeout, recycle, SAPI reset), then Composer-based apps (proven: SAPI reset
-across reuse), then real Laravel / WordPress smoke suites (P0-D work, not
-claimed). Applications
-relying on cross-request in-memory state, `$_SESSION` without external storage,
-`$_FILES` streaming, or `php://input` replay must stay on one-shot until the
-state-reset rules below are proven for them.
+Belum ada selain fixture — mode persistent dapat dipilih sejak P0-B dan
+kelayakan dimulai dari vanilla PHP stateless (terbukti: reuse, pemulihan crash,
+timeout, recycle, reset SAPI), lalu aplikasi berbasis Composer (terbukti: reset SAPI
+antar reuse), lalu suite smoke Laravel / WordPress nyata (pekerjaan P0-D, tidak
+diklaim). Aplikasi
+yang mengandalkan in-memory state lintas-request, `$_SESSION` tanpa storage eksternal,
+streaming `$_FILES`, atau replay `php://input` wajib tetap di one-shot sampai
+aturan reset-state di bawah terbukti untuk mereka.
 
-## 6. State-reset limitations
+## 6. Limitasi reset-state
 
-A persistent PHP worker must not leak state between requests. Until proven
-otherwise, assume leakage via: superglobals, static variables, opcache
-per-process state, open handles, working directory, locale/timezone, RNG state,
-and shutdown-function side effects. The reset contract (P0-B + P1-B, implemented in
-`worker-persistent.php`): `$_GET`/`$_POST` (urlencoded parsed like the web SAPI;
-multipart not parsed)/`$_COOKIE`/`$_REQUEST` rebuilt per
-request, stale `HTTP_*` dropped, `PHPX_*` re-exported per request, output
-buffering reset, `phpx_input()` served from the frame body. Static variables
-and `$GLOBALS` set by app code intentionally persist (documented limit: use
-one-shot when strict isolation is required).
+Worker PHP persistent tidak boleh membocorkan state antar request. Sampai terbukti
+sebaliknya, anggap kebocoran via: superglobals, variabel statis, state opcache
+per-proses, handle terbuka, working directory, locale/timezone, state RNG,
+dan efek-samping shutdown-function. Kontrak reset (P0-B + P1-B, terimplementasi di
+`worker-persistent.php`): `$_GET`/`$_POST` (urlencoded diurai seperti SAPI web;
+multipart tidak diurai)/`$_COOKIE`/`$_REQUEST` dibangun ulang per
+request, `HTTP_*` basi dibuang, `PHPX_*` diekspor ulang per request, output
+buffering direset, `phpx_input()` disajikan dari body frame. Variabel statis
+dan `$GLOBALS` yang diset oleh kode aplikasi secara sengaja persist (batas terdokumentasi: pakai
+one-shot bila isolasi ketat diwajibkan).
 
-## 7. Resource guardian (P0-C, implemented)
+## 7. Guardian sumber daya (P0-C, terimplementasi)
 
-Per-worker OS RSS is sampled at two points: synchronously at request
-completion, and by a background sampler thread every
-`memory_sample_interval_seconds` for idle workers (Busy workers are never
-blocked by the sampler). Observations per incarnation: `rss_bytes`,
-`peak_rss_bytes` (max sampled, lower bound on the true peak), `healthy`,
-`last_ok_at`, plus `startup_duration_ms` (spawn+handshake) and
-`shutdown_duration_ms` (kill+wait) from lifecycle transitions.
+RSS OS per-worker disampel di dua titik: sinkron saat request
+selesai, dan oleh thread sampler latar setiap
+`memory_sample_interval_seconds` untuk worker idle (worker Busy tidak pernah
+diblokir oleh sampler). Observasi per incarnation: `rss_bytes`,
+`peak_rss_bytes` (maks tersampel, batas-bawah dari peak sejati), `healthy`,
+`last_ok_at`, plus `startup_duration_ms` (spawn+handshake) dan
+`shutdown_duration_ms` (kill+wait) dari transisi siklus hidup.
 
-Separate enforcement points (never conflate):
+Titik penegakan terpisah (jangan dicampuradukkan):
 
-- `memory_limit` (PHP `-d memory_limit`): Zend heap only, both modes.
-- `memory_soft_limit` (OS RSS): graceful recycle, replacement first.
-- `memory_hard_limit` (OS RSS): protective termination + respawn.
+- `memory_limit` (PHP `-d memory_limit`): hanya Zend heap, kedua mode.
+- `memory_soft_limit` (OS RSS): recycle graceful, pengganti dulu.
+- `memory_hard_limit` (OS RSS): terminasi protektif + respawn.
 
-Soft < hard when both set (`"0"` disables). Triggers are counted per worker
-(`phpx_worker_memory_limit_hits_total{threshold}`) and restarts carry
-`soft-limit`/`hard-limit` causes. Overshoot between sample points is possible
-(sampling-based, not a hard cap); RSS != PHP heap, and neither stable nor
-high RSS proves anything about leaks — the guardian recycles and protects,
-it does not diagnose.
+Soft < hard bila keduanya diset (`"0"` menonaktifkan). Pemicu dihitung per worker
+(`phpx_worker_memory_limit_hits_total{threshold}`) dan restart membawa
+penyebab `soft-limit`/`hard-limit`. Overshoot antar titik sampel dimungkinkan
+(berbasis sampling, bukan cap keras); RSS != heap PHP, dan baik RSS stabil maupun
+tinggi tidak membuktikan apa pun tentang leak — guardian mendaur-ulang dan melindungi,
+ia tidak mendiagnosis.

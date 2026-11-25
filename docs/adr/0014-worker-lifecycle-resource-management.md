@@ -1,186 +1,186 @@
-# ADR-0014: Worker Lifecycle, Resource Management & Adaptive Recycling
+# ADR-0014: Siklus Hidup Worker, Manajemen Sumber Daya & Recycling Adaptif
 
-- **Status:** Proposed
-- **Date:** 2026-11-17
-- **Scope:** Process Runtime, with compatibility requirements for future Embedded Runtime.
-- **Language:** Main body in Sundanese. English abstract below is normative for cross-document alignment.
-- **Supersedes / Extends:** Extends SPEC Section 5 (Worker management) and Section 8 (Configuration). Does not replace SPEC. Where SPEC lists Failed, that maps to Stopped with diagnostic reason + restart-budget exhausted in this ADR.
+- **Status:** Diusulkan (Proposed)
+- **Tanggal:** 2026-11-17
+- **Lingkup:** Process Runtime, dengan persyaratan kompatibilitas untuk Embedded Runtime mendatang.
+- **Bahasa:** Isi utama dalam bahasa Indonesia (diterjemahkan dari bahasa Sunda; naskah asli berbahasa Sunda). Abstrak bahasa Inggris di bawah bersifat normatif untuk keselarasan antar-dokumen.
+- **Menggantikan / Memperluas:** Memperluas SPEC Bagian 5 (manajemen Worker) dan Bagian 8 (Konfigurasi). Tidak menggantikan SPEC. Di mana SPEC mencantumkan Failed, itu dipetakan ke Stopped dengan diagnostic reason + restart-budget habis dalam ADR ini.
 
-> **English abstract (normative alignment):** PHPX implements a Runtime Health and Memory Guardian as part of Process Runtime. Workers follow Starting -> Ready -> Busy -> Ready, with Ready/Busy -> Draining -> Stopped, Busy -> Unhealthy -> Restarting -> Ready, and Starting -> Failed. Failed is terminal for that worker incarnation and requires operator-visible diagnostics. Bounded pool + bounded queue + backpressure are mandatory. Default is one concurrent request per process worker. Memory uses soft (graceful recycle) and hard (protective termination) thresholds. Adaptive scaling is deferred (disabled by default) until a fixed-pool baseline is stable. See SPEC Sections 5, 8, 11 and ADR-0003, ADR-0004, ADR-0006 for base contracts.
+> **Abstrak bahasa Inggris (penyelarasan normatif; diterjemahkan ke bahasa Indonesia):** PHPX mengimplementasikan Runtime Health and Memory Guardian sebagai bagian dari Process Runtime. Worker mengikuti Starting -> Ready -> Busy -> Ready, dengan Ready/Busy -> Draining -> Stopped, Busy -> Unhealthy -> Restarting -> Ready, dan Starting -> Failed. Failed bersifat terminal untuk inkarnasi worker tersebut dan membutuhkan diagnostik yang terlihat oleh operator. Bounded pool + bounded queue + backpressure bersifat wajib. Default-nya adalah satu request konkuren per process worker. Memori menggunakan ambang soft (recycle graceful) dan hard (terminasi protektif). Penskalaan adaptif ditunda (nonaktif secara default) hingga baseline fixed-pool stabil. Lihat SPEC Bagian 5, 8, 11 serta ADR-0003, ADR-0004, ADR-0006 untuk kontrak dasar.
 
-## 1. Context
+## 1. Konteks
 
-PHPX dirancang minangka Rust-powered PHP Application Platform. Diferensiasi PHPX henteu kedah gumantung kana asumsi yén Rust sacara otomatis ngajadikeun kode aplikasi PHP leuwih gancang.
+PHPX dirancang sebagai Rust-powered PHP Application Platform. Diferensiasi PHPX tidak boleh bergantung pada asumsi bahwa Rust secara otomatis membuat kode aplikasi PHP lebih cepat.
 
-Kaunggulan anu leuwih realistis nyaéta kamampuh ngatur sumber daya PHP sacara konsisten, ngawengku:
+Keunggulan yang lebih realistis adalah kemampuan mengelola sumber daya PHP secara konsisten, meliputi:
 
-- Bounded concurrency jeung explicit backpressure.
+- Bounded concurrency dan explicit backpressure.
 - Worker health monitoring.
 - Memory-aware worker recycling.
-- Graceful shutdown jeung deployment.
+- Graceful shutdown dan deployment.
 - Crash recovery.
 - Resource utilization monitoring.
 - Runtime lifecycle orchestration.
 
-Persistent PHP workers tiasa ngurangan biaya application bootstrap, tapi ogé miboga résiko state persistence antar-request. Global variables, static properties, extension state, jeung in-memory caches tiasa tetep hirup salila worker masih aktip.
+Persistent PHP worker dapat mengurangi biaya application bootstrap, tetapi juga membawa risiko persistensi state antar-request. Global variables, static properties, extension state, dan in-memory cache dapat tetap hidup selama worker masih aktif.
 
-Ku kituna, PHPX peryogi mékanisme pikeun ngawas, ngatur, jeung mulangkeun worker kana kaayaan séhat tanpa ngaganggu aplikasi sacara teu perlu.
+Oleh karena itu, PHPX membutuhkan mekanisme untuk mengawasi, mengatur, dan mengembalikan worker ke keadaan sehat tanpa mengganggu aplikasi secara tidak perlu.
 
-## 2. Decision
+## 2. Keputusan
 
-PHPX bakal ngembangkeun Runtime Health & Memory Guardian minangka bagian integral tina Process Runtime.
+PHPX akan mengembangkan Runtime Health & Memory Guardian sebagai bagian integral dari Process Runtime.
 
-Subsystem ieu tanggung jawab pikeun ngawas kaayaan worker, nganalisis pamakéan sumber daya, sarta koordinasi tindakan lifecycle ngaliwatan Worker Manager.
+Subsistem ini bertanggung jawab untuk mengawasi keadaan worker, menganalisis pemakaian sumber daya, serta mengoordinasikan tindakan siklus hidup melalui Worker Manager.
 
-PHPX bakal ngagunakeun pendekatan resource management anu konservatif dina release awal. Prioritasna nyaéta predictable behavior, stability, jeung observability saméméh adaptive optimization.
+PHPX akan menggunakan pendekatan manajemen sumber daya yang konservatif pada rilis awal. Prioritasnya adalah perilaku yang dapat diprediksi, stabilitas, dan observabilitas sebelum optimasi adaptif.
 
-### 2.1 Worker Lifecycle State Machine
+### 2.1 State Machine Siklus Hidup Worker
 
-Unggal worker kudu miboga lifecycle state anu jelas:
+Setiap worker harus memiliki lifecycle state yang jelas:
 
-- `Starting`: prosés keur dijieun jeung diinisialisasi.
-- `Ready`: worker geus siap narima request.
-- `Busy`: worker keur ngolah hiji request atawa job.
-- `Draining`: worker henteu narima request anyar, tapi meunang ngaréngsékeun tugas anu keur lumangsung.
-- `Restarting`: worker keur diganti.
-- `Unhealthy`: worker gagal dina health check atawa ngaleuwihan wates operasional.
-- `Stopped`: worker geus eureun sarta henteu kaasup kapasitas aktif.
-- `Failed`: worker gagal startup atawa ngaleuwihan restart budget / circuit breaker. Terminal pikeun inkarnasi eta, wajib aya diagnostic reason. Pemetaan sareng SPEC Section 5.1 Starting -> Failed.
+- `Starting`: proses sedang dibuat dan diinisialisasi.
+- `Ready`: worker sudah siap menerima request.
+- `Busy`: worker sedang mengolah satu request atau job.
+- `Draining`: worker tidak menerima request baru, tetapi boleh menyelesaikan tugas yang sedang berjalan.
+- `Restarting`: worker sedang diganti.
+- `Unhealthy`: worker gagal dalam health check atau melampaui batas operasional.
+- `Stopped`: worker sudah berhenti dan tidak termasuk kapasitas aktif.
+- `Failed`: worker gagal startup atau melampaui restart budget / circuit breaker. Terminal untuk inkarnasi tersebut, wajib ada diagnostic reason. Pemetaan dengan SPEC Bagian 5.1 Starting -> Failed.
 
-Worker anu aya dina status `Draining`, `Restarting`, `Unhealthy`, `Stopped`, atawa `Failed` henteu meunang narima tugas anyar.
+Worker yang berada dalam status `Draining`, `Restarting`, `Unhealthy`, `Stopped`, atau `Failed` tidak boleh menerima tugas baru.
 
 ### 2.2 Bounded Execution & Backpressure
 
-PHPX wajib ngagunakeun bounded worker pool jeung bounded request queue.
+PHPX wajib menggunakan bounded worker pool dan bounded request queue.
 
-Default concurrency pikeun unggal PHP process worker nyaéta hiji request dina hiji waktu.
+Konkuren default untuk setiap PHP process worker adalah satu request dalam satu waktu.
 
-PHP execution henteu meunang dijalankeun langsung dina Tokio executor thread sabab operasi PHP umumna blocking.
+Eksekusi PHP tidak boleh dijalankan langsung di atas Tokio executor thread karena operasi PHP umumnya blocking.
 
-Lamun kapasitas worker geus pinuh, PHPX kudu nerapkeun backpressure sarta overload response anu dikonfigurasi, tibatan ngantepkeun request queue tumuwuh tanpa wates.
+Bila kapasitas worker sudah penuh, PHPX harus menerapkan backpressure serta overload response yang dikonfigurasi, alih-alih membiarkan request queue tumbuh tanpa batas.
 
-Queue waiting time jeung request execution time kudu diukur sacara misah.
+Queue waiting time dan request execution time harus diukur secara terpisah.
 
-PHPX henteu ngaku nyadiakeun coroutine concurrency dina hiji PHP worker. Parallel request processing dina Process Runtime awalna kahontal ngaliwatan sababaraha worker anu diawasan.
+PHPX tidak mengklaim menyediakan coroutine concurrency dalam satu PHP worker. Pemrosesan request paralel dalam Process Runtime awalnya dicapai melalui beberapa worker yang diawasi.
 
 ### 2.3 Worker Health Monitoring
 
-Runtime Health & Memory Guardian kudu ngumpulkeun informasi:
+Runtime Health & Memory Guardian harus mengumpulkan informasi:
 
-- Worker RSS jeung peak RSS lamun sadia.
+- Worker RSS dan peak RSS bila tersedia.
 - Worker uptime.
-- Jumlah request anu geus réngsé.
-- Request execution duration.
-- Worker startup jeung shutdown duration.
-- Exit code jeung termination reason.
-- Restart count jeung restart frequency.
-- Last successful health check.
-- Worker state jeung workload ayeuna.
+- Jumlah request yang sudah selesai.
+- Durasi eksekusi request.
+- Durasi startup dan shutdown worker.
+- Exit code dan termination reason.
+- Restart count dan frekuensi restart.
+- Health check terakhir yang berhasil.
+- Status worker dan beban kerja saat ini.
 
-PHP-level memory usage kudu dibédakeun ti OS-level RSS.
+Pemakaian memori setingkat PHP harus dibedakan dari RSS setingkat OS.
 
-RSS henteu otomatis ngabuktikeun memory leak. PHP allocator, native extensions, shared libraries, jeung memory fragmentation tiasa ngajaga RSS tetep luhur sanajan objék aplikasi geus dileupaskeun.
+RSS tidak otomatis membuktikan memory leak. Alokator PHP, ekstensi native, shared library, dan fragmentasi memori dapat menjaga RSS tetap tinggi walaupun objek aplikasi sudah dilepaskan.
 
-### 2.4 Worker Recycling Policy
+### 2.4 Kebijakan Recycling Worker
 
-Worker tiasa direcycle dumasar kana sababaraha kaayaan:
+Worker dapat di-recycle berdasarkan beberapa kondisi:
 
-- Maximum completed requests.
-- Soft memory threshold.
-- Hard memory threshold.
-- Maximum worker uptime.
-- Repeated request timeout.
-- Health check failure.
-- Manual administrative action.
-- Deployment replacement.
+- Jumlah request selesai maksimum.
+- Ambang memori soft.
+- Ambang memori hard.
+- Uptime worker maksimum.
+- Timeout request berulang.
+- Kegagalan health check.
+- Tindakan administratif manual.
+- Penggantian deployment.
 
-Prosés graceful recycling:
+Proses graceful recycling:
 
-1. Worker dipindahkeun kana status `Draining`.
-2. Worker henteu meunang narima request anyar.
-3. Request anu keur lumangsung dibéré waktos pikeun réngsé.
-4. Runtime ngirimkeun graceful shutdown signal.
-5. Worker dipaksa eureun lamun shutdown deadline kaliwat.
-6. Replacement worker dijieun.
-7. Worker anyar jadi `Ready` sanggeus startup handshake hasil.
+1. Worker dipindahkan ke status `Draining`.
+2. Worker tidak boleh menerima request baru.
+3. Request yang sedang berjalan diberi waktu untuk selesai.
+4. Runtime mengirimkan graceful shutdown signal.
+5. Worker dipaksa berhenti bila shutdown deadline terlewati.
+6. Replacement worker dibuat.
+7. Worker baru menjadi `Ready` setelah startup handshake berhasil.
 
-PHPX kudu nyingkahan simultaneous worker restart anu tiasa ngurangan kapasitas layanan sacara drastis.
+PHPX harus menghindari simultaneous worker restart yang dapat mengurangi kapasitas layanan secara drastis.
 
-### 2.5 Memory Threshold Management
+### 2.5 Manajemen Ambang Memori
 
-PHPX bakal ngabédakeun dua memory threshold.
+PHPX akan membedakan dua ambang memori.
 
-**Soft Memory Threshold**
+**Ambang Memori Soft**
 
-Lamun worker ngahontal wates ieu, PHPX bakal ngajadwalkeun graceful recycling sanggeus request ayeuna réngsé.
+Bila worker mencapai batas ini, PHPX akan menjadwalkan graceful recycling setelah request saat ini selesai.
 
-**Hard Memory Threshold**
+**Ambang Memori Hard**
 
-Lamun worker ngahontal wates ieu, PHPX tiasa ngalakukeun protective termination pikeun ngajaga stabilitas host.
+Bila worker mencapai batas ini, PHPX dapat melakukan protective termination untuk menjaga stabilitas host.
 
-Memory threshold kudu bisa dikonfigurasi per worker, boh dina ukuran absolut boh persentase mémori host lamun platform ngadukung.
+Ambang memori harus dapat dikonfigurasi per worker, baik dalam ukuran absolut maupun persentase memori host bila platform mendukung.
 
-PHPX henteu ngajamin yén konsumsi mémori moal kungsi ngaleuwihan nilai konfigurasi. Sampling interval, allocation burst, jeung termination latency tiasa nyababkeun overshoot.
+PHPX tidak menjamin bahwa konsumsi memori tidak akan pernah melampaui nilai konfigurasi. Sampling interval, allocation burst, dan termination latency dapat menyebabkan overshoot.
 
-### 2.6 Restart Protection
+### 2.6 Proteksi Restart
 
-Unexpected worker exit kudu ditangani ku mékanisme:
+Unexpected worker exit harus ditangani dengan mekanisme:
 
 - Exponential backoff.
 - Randomized jitter.
-- Restart budget dina rolling time window.
-- Circuit breaker pikeun repeated startup failure.
-- Diagnostic status lamun restart budget béak.
+- Restart budget dalam rolling time window.
+- Circuit breaker untuk repeated startup failure.
+- Status diagnostik bila restart budget habis.
 
-Tujuanana nyaéta nyegah infinite respawn loop anu tiasa ngabalukarkeun konsumsi CPU jeung mémori tanpa kendali.
+Tujuannya adalah mencegah infinite respawn loop yang dapat menyebabkan konsumsi CPU dan memori tanpa kendali.
 
-### 2.7 Adaptive Worker Management
+### 2.7 Manajemen Worker Adaptif
 
-Adaptive worker scaling ditunda nepi ka fixed worker pool boga baseline anu stabil.
+Penskalaan worker adaptif ditunda hingga fixed worker pool memiliki baseline yang stabil.
 
-Dina tahap salajengna, PHPX tiasa nyaluyukeun jumlah worker dumasar kana:
+Pada tahap berikutnya, PHPX dapat menyesuaikan jumlah worker berdasarkan:
 
 - Queue depth.
 - Queue waiting time.
-- Active worker count.
-- CPU pressure.
-- Memory headroom.
-- System resource availability.
+- Jumlah worker aktif.
+- Tekanan CPU.
+- Headroom memori.
+- Ketersediaan sumber daya sistem.
 
-Adaptive controller kudu miboga:
+Adaptive controller harus memiliki:
 
-- Minimum jeung maximum worker limits.
-- Scale-up jeung scale-down thresholds.
+- Batas worker minimum dan maksimum.
+- Ambang scale-up dan scale-down.
 - Cooldown period.
 - Hysteresis.
-- Host-level memory safeguards.
-- Minimum-ready worker capacity.
+- Safeguard memori setingkat host.
+- Kapasitas worker minimum-ready.
 
-Adaptive mode kudu nonaktif sacara default nepi ka hasil benchmark ngabuktikeun yén mékanisme ieu aman jeung méré mangpaat nyata.
+Mode adaptif harus nonaktif secara default hingga hasil benchmark membuktikan bahwa mekanisme ini aman dan memberi manfaat nyata.
 
-### 2.8 Request State Isolation
+### 2.8 Isolasi Status Request
 
-PHPX kudu ngajelaskeun yén persistent PHP workers tiasa ngajaga process-level state antar-request.
+PHPX harus menjelaskan bahwa persistent PHP worker dapat menjaga process-level state antar-request.
 
-Runtime kudu nyadiakeun request lifecycle boundary sarta ngaevaluasi framework-specific reset hooks lamun sadia.
+Runtime harus menyediakan request lifecycle boundary serta mengevaluasi framework-specific reset hooks bila tersedia.
 
-PHPX henteu meunang ngajamin universal state isolation pikeun sakabéh aplikasi PHP konvensional.
+PHPX tidak boleh menjamin isolasi state universal untuk seluruh aplikasi PHP konvensional.
 
-Pikeun aplikasi anu henteu aman dijalankeun dina persistent worker, PHPX kudu nyadiakeun compatibility execution mode anu ngawatesan process reuse, kaasup one-request-per-process lamun diperlukeun.
+Untuk aplikasi yang tidak aman dijalankan dalam persistent worker, PHPX harus menyediakan mode eksekusi kompatibilitas yang membatasi reuse proses, termasuk one-request-per-process bila diperlukan.
 
-Compatibility testing kudu ngawengku:
+Pengujian kompatibilitas harus mencakup:
 
 - Global variables.
 - Static properties.
 - Session state.
 - Environment variables.
-- Output buffers.
-- Error handlers.
+- Output buffer.
+- Error handler.
 - Extension-managed state.
 
-### 2.9 Configuration Model
+### 2.9 Model Konfigurasi
 
-Conto konfigurasi awal:
+Contoh konfigurasi awal:
 
 ```toml
 [runtime.process]
@@ -214,140 +214,140 @@ scale_down_idle_duration = "60s"
 cooldown = "15s"
 ```
 
-Nilai di luhur mangrupa conto konfigurasi, sanés default final. Default kudu ditangtukeun ngaliwatan benchmark jeung validasi dina deployment profile anu dirojong.
+Nilai di atas merupakan contoh konfigurasi, bukan default final. Nilai default harus ditentukan melalui benchmark dan validasi pada deployment profile yang didukung.
 
-### 2.10 Observability
+### 2.10 Observabilitas
 
-PHPX kudu nyadiakeun metrics jeung structured events pikeun:
+PHPX harus menyediakan metrik dan structured event untuk:
 
-- Worker state distribution.
-- Worker RSS jeung peak RSS.
-- Requests completed per worker.
-- Worker restart count dumasar kana alesan.
-- Restart failure.
-- Queue depth jeung queue waiting duration.
-- Overload response count.
-- Request execution duration.
-- Worker startup jeung shutdown duration.
+- Distribusi status worker.
+- Worker RSS dan peak RSS.
+- Request selesai per worker.
+- Jumlah restart worker berdasarkan alasan.
+- Kegagalan restart.
+- Kedalaman antrean dan durasi tunggu antrean.
+- Jumlah overload response.
+- Durasi eksekusi request.
+- Durasi startup dan shutdown worker.
 
-Structured logs henteu meunang ngandung secrets, request bodies, session contents, atawa data sénsitip sacara default.
+Structured log tidak boleh mengandung secret, request body, isi sesi, atau data sensitif secara default.
 
-## 3. Consequences
+## 3. Konsekuensi
 
-### Positive Consequences
+### Konsekuensi Positif
 
-- Resource utilization leuwih gampang dikontrol jeung diprediksi.
-- Memory growth tiasa ditangani ngaliwatan controlled recycling.
-- Worker crash miboga recovery mechanism anu jelas.
-- Backpressure ngurangan résiko unbounded queue growth.
-- Operator tiasa ningali alesan worker direcycle atawa diterminasi.
-- PHPX miboga diferensiasi dina tingkat platform tanpa kudu nyieun klaim performa anu can kabuktian.
+- Utilisasi sumber daya lebih mudah dikontrol dan diprediksi.
+- Pertumbuhan memori dapat ditangani melalui recycling terkendali.
+- Crash worker memiliki mekanisme pemulihan yang jelas.
+- Backpressure mengurangi risiko pertumbuhan antrean tanpa batas.
+- Operator dapat melihat alasan worker di-recycle atau diterminasi.
+- PHPX memiliki diferensiasi di tingkat platform tanpa harus membuat klaim performa yang belum terbukti.
 
-### Negative Consequences
+### Konsekuensi Negatif
 
-- Worker supervision jeung resource monitoring nambahan kompleksitas implementasi.
-- Memory sampling miboga overhead.
-- Worker recycling tiasa nambahan latency alatan application bootstrap ulang.
-- Persistent worker state isolation henteu tiasa dijamin pikeun sakabéh aplikasi.
-- Resource limit anu konservatif tiasa ngurangan peak throughput.
-- Adaptive scaling peryogi tuning anu taliti pikeun nyingkahan oscillation.
+- Supervisi worker dan pemantauan sumber daya menambah kompleksitas implementasi.
+- Sampling memori memiliki overhead.
+- Recycling worker dapat menambah latensi akibat bootstrap aplikasi ulang.
+- Isolasi state persistent worker tidak dapat dijamin untuk semua aplikasi.
+- Batas sumber daya yang konservatif dapat mengurangi throughput puncak.
+- Penskalaan adaptif membutuhkan tuning yang cermat untuk menghindari osilasi.
 
-## 4. Implementation Plan
+## 4. Rencana Implementasi
 
-### Phase A: Deterministic Process Runtime
+### Fase A: Runtime Proses Deterministik
 
-1. Ngawangun worker lifecycle state machine.
-2. Ngimplementasikeun bounded worker pool jeung queue limits.
-3. Nambahkeun request counter jeung maximum-request recycling.
-4. Ngimplementasikeun graceful drain jeung shutdown deadline.
-5. Nambahkeun crash detection jeung restart protection.
-6. Nyadiakeun worker lifecycle metrics.
+1. Membangun state machine siklus hidup worker.
+2. Mengimplementasikan bounded worker pool dan batas antrean.
+3. Menambahkan penghitung request dan recycling berbasis request maksimum.
+4. Mengimplementasikan graceful drain dan shutdown deadline.
+5. Menambahkan deteksi crash dan proteksi restart.
+6. Menyediakan metrik siklus hidup worker.
 
-### Phase B: Memory-aware Supervision
+### Fase B: Supervisi Sadar Memori
 
-1. Ngawangun RSS sampling abstraction.
-2. Ngimplementasikeun soft jeung hard memory thresholds.
-3. Nambahkeun graceful recycling dumasar kana soft threshold.
-4. Nambahkeun protective termination dumasar kana hard threshold.
-5. Nguji sampling failure jeung threshold overshoot.
-6. Ngadokumentasikeun watesan RSS monitoring.
+1. Membangun abstraksi sampling RSS.
+2. Mengimplementasikan ambang memori soft dan hard.
+3. Menambahkan graceful recycling berdasarkan ambang soft.
+4. Menambahkan protective termination berdasarkan ambang hard.
+5. Menguji kegagalan sampling dan overshoot ambang.
+6. Mendokumentasikan batasan pemantauan RSS.
 
-### Phase C: Compatibility & Stability
+### Fase C: Kompatibilitas & Stabilitas
 
-1. Nguji Vanilla PHP, Laravel, WordPress, jeung WooCommerce.
-2. Nguji state leakage antar-request.
-3. Ngalakukeun long-duration memory stability testing.
-4. Nguji worker crash, timeout, OOM termination, jeung graceful deployment.
-5. Validasi native Linux jeung Docker.
+1. Menguji Vanilla PHP, Laravel, WordPress, dan WooCommerce.
+2. Menguji kebocoran state antar-request.
+3. Melakukan pengujian stabilitas memori durasi panjang.
+4. Menguji crash worker, timeout, terminasi OOM, dan deployment graceful.
+5. Memvalidasi Linux native dan Docker.
 
-### Phase D: Adaptive Management
+### Fase D: Manajemen Adaptif
 
-1. Ngawangun prototype queue-aware jeung memory-aware scaling.
-2. Nerapkeun hysteresis jeung cooldown.
-3. Ngabandingkeun adaptive management jeung fixed worker pool.
-4. Ngajaga adaptive mode nonaktif nepi ka aya bukti stabilitas anu cekap.
+1. Membangun prototipe penskalaan sadar antrean dan sadar memori.
+2. Menerapkan hysteresis dan cooldown.
+3. Membandingkan manajemen adaptif dengan fixed worker pool.
+4. Menjaga mode adaptif nonaktif hingga ada bukti stabilitas yang cukup.
 
-## 5. Validation & Acceptance Criteria
+## 5. Kriteria Validasi & Penerimaan
 
-Runtime Health & Memory Guardian henteu dianggap production-ready saméméh:
+Runtime Health & Memory Guardian tidak dianggap production-ready sebelum:
 
-- Worker lifecycle transitions deterministik jeung geus diuji.
-- Worker count jeung queue size salawasna aya dina configured bounds.
-- Draining worker henteu narima request anyar.
-- Unexpected worker exit henteu nyababkeun infinite restart loop.
-- Soft memory threshold memicu controlled recycling.
-- Hard memory threshold tiasa ngajaga host dina wates sampling jeung termination latency anu geus didokumentasikeun.
-- Metrics tiasa ngajelaskeun alesan unggal worker direcycle atawa diterminasi.
-- Repeated-request compatibility tests lulus.
-- Long-duration tests ngahasilkeun laporan RSS trend, restart count, throughput, jeung latency.
-- Native Linux jeung Docker behavior geus divalidasi.
+- Transisi siklus hidup worker deterministik dan sudah diuji.
+- Jumlah worker dan ukuran antrean selalu berada dalam batas konfigurasi.
+- Worker yang draining tidak menerima request baru.
+- Worker exit yang tak terduga tidak menyebabkan infinite restart loop.
+- Ambang memori soft memicu recycling terkendali.
+- Ambang memori hard dapat menjaga host dalam batas sampling dan latensi terminasi yang didokumentasikan.
+- Metrik dapat menjelaskan alasan setiap worker di-recycle atau diterminasi.
+- Uji kompatibilitas request berulang lolos.
+- Uji durasi panjang menghasilkan laporan tren RSS, jumlah restart, throughput, dan latensi.
+- Perilaku Linux native dan Docker sudah divalidasi.
 
-Benchmark PHPX kudu dibandingkeun jeung FrankenPHP, RoadRunner, Swoole/OpenSwoole, sarta Nginx + PHP-FPM lamun relevan.
+Benchmark PHPX harus dibandingkan dengan FrankenPHP, RoadRunner, Swoole/OpenSwoole, serta Nginx + PHP-FPM bila relevan.
 
-Sadaya benchmark kudu ngagunakeun hardware, PHP build, PHP version, extensions, application, data store, workload, jeung tuning methodology anu sarua.
+Seluruh benchmark harus menggunakan hardware, build PHP, versi PHP, ekstensi, aplikasi, data store, workload, dan metodologi tuning yang sama.
 
-Benchmark report kudu ngawengku:
+Laporan benchmark harus mencakup:
 
-- Requests per second.
-- Latency p50, p95, p99, jeung maximum.
-- Per-worker jeung total RSS.
-- Memory growth over time.
-- Worker restart count jeung reasons.
-- CPU utilization.
-- Queue depth jeung overload behavior.
-- Recovery time sanggeus worker failure.
+- Request per detik.
+- Latensi p50, p95, p99, dan maksimum.
+- RSS per worker dan total.
+- Pertumbuhan memori dari waktu ke waktu.
+- Jumlah dan alasan restart worker.
+- Utilisasi CPU.
+- Kedalaman antrean dan perilaku overload.
+- Waktu pemulihan setelah kegagalan worker.
 
-PHPX henteu meunang nyebarkeun klaim performance parity saméméh aya hasil benchmark anu repeatable.
+PHPX tidak boleh memublikasikan klaim performance parity sebelum ada hasil benchmark yang repeatable.
 
-## 6. Alternatives Considered
+## 6. Alternatif yang Dipertimbangkan
 
-### Request-count Recycling Only
+### Recycling Berbasis Jumlah Request Saja
 
-Ditolak minangka hiji-hijina mékanisme sabab jumlah request henteu cukup pikeun ngagambarkeun memory growth jeung worker health.
+Ditolak sebagai satu-satunya mekanisme karena jumlah request tidak cukup untuk menggambarkan pertumbuhan memori dan kesehatan worker.
 
-### Memory Threshold Only
+### Ambang Memori Saja
 
-Ditolak sabab henteu tiasa ngadeteksi sakabéh masalah, kaasup stuck worker, repeated startup failure, jeung state leakage.
+Ditolak karena tidak dapat mendeteksi seluruh masalah, termasuk worker macet, kegagalan startup berulang, dan kebocoran state.
 
-### Fixed Synchronized Worker Restart
+### Restart Worker Tersinkronisasi Tetap
 
-Ditolak sabab tiasa nyababkeun kapasitas layanan turun sacara sakaligus jeung application bootstrap anu teu perlu.
+Ditolak karena dapat menyebabkan kapasitas layanan turun sekaligus dan bootstrap aplikasi yang tidak perlu.
 
-### Aggressive Adaptive Scaling in Initial Release
+### Penskalaan Adaptif Agresif pada Rilis Awal
 
-Ditunda sabab PHPX peryogi fixed-pool baseline anu stabil saméméh ngawangun adaptive controller.
+Ditunda karena PHPX membutuhkan baseline fixed-pool yang stabil sebelum membangun adaptive controller.
 
-### Rely Entirely on OS or Container OOM Killer
+### Sepenuhnya Mengandalkan OOM Killer OS atau Kontainer
 
-Ditolak minangka strategi utama sabab OOM killer mangrupa mékanisme panyalindungan pamungkas, sanés application-level lifecycle management.
+Ditolak sebagai strategi utama karena OOM killer merupakan mekanisme perlindungan terakhir, bukan manajemen siklus hidup setingkat aplikasi.
 
-## 7. References
+## 7. Referensi
 
-- PHPX Technical Specification v0.1.
+- Spesifikasi Teknis PHPX v0.1.
 - ADR-0003: Hybrid PHP Runtime.
 - ADR-0004: Strict Compatibility.
 - ADR-0006: Tokio and Blocking Execution.
 - ADR-0010: Observability.
 - ADR-0011: Security and Isolation.
-- FrankenPHP Worker Documentation: https://frankenphp.dev/docs/worker/
-- OpenSwoole Process Configuration: https://openswoole.com/docs/modules/swoole-server/configuration
+- Dokumentasi FrankenPHP Worker: https://frankenphp.dev/docs/worker/
+- Konfigurasi Proses OpenSwoole: https://openswoole.com/docs/modules/swoole-server/configuration

@@ -1,27 +1,31 @@
-## ADR-0003: Hybrid PHP runtime architecture
+## ADR-0003: Arsitektur runtime PHP hibrida
 
--   **Status:** Accepted
--   **Decision:** PHPX supports two runtime backends behind a common
-    runtime abstraction:
-    1.  **Process Runtime:** PHP executes in separately supervised OS
-        processes. This is the default and production baseline.
-    2.  **Embedded Runtime:** PHP Embed SAPI is hosted through a
-        carefully controlled native bridge. This remains experimental
-        until it passes compatibility, isolation, and stability gates.
--   **Context:** Process execution provides a stronger compatibility and
-    fault-isolation boundary. Embedding may reduce boundary overhead and
-    simplify some deployment shapes, but introduces ABI, lifecycle,
-    thread-safety, extension, and crash-containment complexity.
--   **Consequences:**
-    -   Runtime selection is explicit in configuration; no silent
-        backend switching.
-    -   Both backends implement the same platform-facing lifecycle and
-        execution contracts where semantics genuinely match.
-    -   Backend-specific capabilities are advertised, not assumed.
-    -   Embedded execution must use controlled execution domains. PHP
-        NTS must never be concurrently entered from arbitrary Tokio
-        threads.
-    -   A process boundary remains available for untrusted or
-        crash-sensitive workloads.
-    -   The embedded backend cannot become the default merely because a
-        microbenchmark is faster.
+-   **Status:** Diterima (Accepted)
+-   **Keputusan:** PHPX mendukung dua backend runtime di balik abstraksi
+    runtime yang sama:
+    1.  **Process Runtime:** PHP dieksekusi dalam proses OS terpisah
+        yang disupervisi. Ini adalah default dan basis produksi.
+    2.  **Embedded Runtime:** PHP Embed SAPI dihos melalui native
+        bridge yang dikendalikan secara cermat. Backend ini tetap
+        eksperimental sampai lolos gerbang kompatibilitas, isolasi, dan
+        stabilitas.
+-   **Konteks:** Eksekusi berbasis proses menyediakan batas
+    kompatibilitas dan isolasi kesalahan yang lebih kuat. Embedding
+    dapat mengurangi overhead batas dan menyederhanakan sebagian bentuk
+    deployment, tetapi menimbulkan kompleksitas ABI, siklus hidup,
+    thread-safety, ekstensi, dan penjinakan crash.
+-   **Konsekuensi:**
+    -   Pemilihan runtime bersifat eksplisit dalam konfigurasi; tidak
+        ada peralihan backend diam-diam.
+    -   Kedua backend mengimplementasikan kontrak siklus hidup dan
+        eksekusi yang sama di sisi platform sejauh semantiknya
+        benar-benar cocok.
+    -   Kapabilitas khusus backend diiklankan (advertised), bukan
+        diasumsikan.
+    -   Eksekusi embedded harus menggunakan domain eksekusi yang
+        terkendali. PHP NTS tidak boleh dimasuki secara konkuren dari
+        thread Tokio sembarang.
+    -   Batas proses tetap tersedia untuk beban kerja yang tidak
+        tepercaya atau sensitif terhadap crash.
+    -   Backend embedded tidak dapat menjadi default hanya karena sebuah
+        microbenchmark lebih cepat.

@@ -1,7 +1,9 @@
-# Contributing (M0)
+# Berkontribusi
 
-- Small, testable PRs. M0 scope is the Rust workspace skeleton only.
-- Run before push: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
-- Config changes must keep `phpx.toml.example` parsing (see `phpx-config` tests).
-- CLI changes must keep `phpx doctor` output actionable and secret-free.
-- Docs: update SPEC/roadmap/ADR only via explicit ADR process; ADR-0014 is Proposed.
+- PR kecil yang dapat diuji. Lingkup M0 hanya kerangka workspace Rust
+  (kini: ikuti roadmap — M0-M7 + P0-P2 selesai; lihat `roadmap.md`).
+- Jalankan sebelum push: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
+- Perubahan config harus menjaga `phpx.toml.example` tetap ter-parse (lihat test `phpx-config`).
+- Perubahan CLI harus menjaga output `phpx doctor` tetap actionable dan bebas secret.
+- Dok: perbarui SPEC/roadmap/ADR hanya via proses ADR eksplisit; ADR-0014 berstatus Proposed.
+- Bahasa dok: Indonesia (dok lama Inggris/Sunda diterjemahkan bertahap).

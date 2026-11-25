@@ -1,301 +1,294 @@
-# PHPX Architecture Decision Records
+# Catatan Keputusan Arsitektur PHPX
 
-**Project:** PHPX\
-**Document version:** 0.1.0\
-**Status:** Accepted baseline, subject to implementation validation\
-**Last updated:** 2026-11-17 (ADR-0014 added as Proposed, not yet Accepted)
+**Proyek:** PHPX\
+**Versi dokumen:** 0.1.0\
+**Status:** Baseline Accepted, tunduk pada validasi implementasi\
+**Terakhir diperbarui:** 2026-11-25 (jalur serve embedded P2 terkabel; soak 6 jam terarsip; ADR-0014 tetap Proposed, belum Accepted)
 
-This directory records architectural decisions that materially shape
-PHPX. An ADR is immutable after acceptance: superseding a decision
-requires a new ADR that references the earlier one.
+Direktori ini mencatat keputusan arsitektural yang membentuk PHPX secara
+material. ADR bersifat imutabel setelah diterima: mengganti keputusan
+membutuhkan ADR baru yang merujuk ADR sebelumnya.
 
-## ADR-0001: Product identity and scope
-
--   **Status:** Accepted
--   **Decision:** The product is named **PHPX** and is a Rust-powered
-    PHP application platform, not merely an HTTP server or a PHP process
-    manager.
--   **Context:** A server-only scope would leave queue processing,
-    scheduling, runtime lifecycle, storage integration, and operational
-    tooling fragmented.
--   **Consequences:**
-    -   PHPX provides a unified developer-facing CLI and configuration
-        model.
-    -   The platform is composed of independently testable subsystems.
-    -   The first release prioritizes a reliable HTTP + PHP execution
-        path; other services are added incrementally.
-    -   The name PHPX is a working product identity and must undergo
-        repository, package, domain, and trademark checks before
-        commercial release.
-
-## ADR-0002: Rust is the platform control plane
+## ADR-0001: Identitas dan lingkup produk
 
 -   **Status:** Accepted
--   **Decision:** Rust owns platform infrastructure: gateway, lifecycle
-    management, worker supervision, scheduling, queue coordination,
-    resource controls, observability, and CLI.
--   **Context:** Rust offers predictable resource control and strong
-    systems-programming capabilities. PHP remains the application
-    language and execution engine.
--   **Consequences:**
-    -   PHP application code is not rewritten in Rust.
-    -   Platform-to-runtime boundaries are explicit and versioned.
-    -   Async orchestration must not execute blocking PHP work directly
-        on Tokio executor threads.
-    -   Rust subsystem failure handling and graceful shutdown are
-        first-class design requirements.
+-   **Keputusan:** Produk bernama **PHPX** dan merupakan platform aplikasi
+    PHP bertenaga Rust, bukan sekadar server HTTP atau manajer proses PHP.
+-   **Konteks:** Lingkup khusus-server akan membiarkan pemrosesan antre,
+    penjadwalan, siklus hidup runtime, integrasi storage, dan perkakas
+    operasional terfragmentasi.
+-   **Konsekuensi:**
+    -   PHPX menyediakan CLI dan model konfigurasi yang menyatu dan
+        menghadap developer.
+    -   Platform tersusun dari subsistem yang dapat diuji independen.
+    -   Rilis pertama memprioritaskan jalur eksekusi HTTP + PHP yang andal;
+        layanan lain ditambah bertahap.
+    -   Nama PHPX adalah identitas produk kerja dan harus melalui cek
+        repositori, paket, domain, dan merek dagang sebelum rilis komersial.
 
-## ADR-0003: Hybrid PHP runtime architecture
-
--   **Status:** Accepted
--   **Decision:** PHPX supports two runtime backends behind a common
-    runtime abstraction:
-    1.  **Process Runtime:** PHP executes in separately supervised OS
-        processes. This is the default and production baseline.
-    2.  **Embedded Runtime:** PHP Embed SAPI is hosted through a
-        carefully controlled native bridge. This remains experimental
-        until it passes compatibility, isolation, and stability gates.
--   **Context:** Process execution provides a stronger compatibility and
-    fault-isolation boundary. Embedding may reduce boundary overhead and
-    simplify some deployment shapes, but introduces ABI, lifecycle,
-    thread-safety, extension, and crash-containment complexity.
--   **Consequences:**
-    -   Runtime selection is explicit in configuration; no silent
-        backend switching.
-    -   Both backends implement the same platform-facing lifecycle and
-        execution contracts where semantics genuinely match.
-    -   Backend-specific capabilities are advertised, not assumed.
-    -   Embedded execution must use controlled execution domains. PHP
-        NTS must never be concurrently entered from arbitrary Tokio
-        threads.
-    -   A process boundary remains available for untrusted or
-        crash-sensitive workloads.
-    -   The embedded backend cannot become the default merely because a
-        microbenchmark is faster.
-
-## ADR-0004: Strict PHP application compatibility
+## ADR-0002: Rust adalah bidang kendali platform
 
 -   **Status:** Accepted
--   **Decision:** PHPX targets unmodified, conventional PHP
-    applications. Platform-specific APIs are optional enhancements and
-    never required for baseline execution.
--   **Context:** The platform must be useful to the existing PHP
-    ecosystem, especially Laravel, WordPress, and WooCommerce.
--   **Consequences:**
-    -   PHPX must preserve normal PHP request semantics, environment
-        variables, document-root/front-controller behavior, headers,
-        cookies, request bodies, status codes, and error behavior.
-    -   Compatibility is verified using real application fixtures and
-        extension matrices.
-    -   PHPX does not promise compatibility with every extension or
-        every PHP SAPI behavior in v0.1.
-    -   Unsupported behavior must be documented precisely; PHPX must
-        fail clearly rather than silently alter application semantics.
-    -   Optional PHPX APIs require versioning and cannot be
-        prerequisites for ordinary application hosting.
+-   **Keputusan:** Rust memiliki infrastruktur platform: gateway, manajemen
+    siklus hidup, supervisi worker, penjadwalan, koordinasi antre,
+    kontrol resource, observabilitas, dan CLI.
+-   **Konteks:** Rust menawarkan kontrol resource yang dapat diprediksi dan
+    kapabilitas pemrograman sistem yang kuat. PHP tetap bahasa aplikasi dan
+    mesin eksekusi.
+-   **Konsekuensi:**
+    -   Kode aplikasi PHP tidak ditulis ulang ke Rust.
+    -   Batas platform-ke-runtime eksplisit dan berversi.
+    -   Orkestrasi async tidak boleh mengeksekusi kerja PHP yang blocking
+        langsung di thread eksekutor Tokio.
+    -   Penanganan kegagalan subsistem Rust dan shutdown graceful adalah
+        syarat desain kelas-satu.
 
-## ADR-0005: Docker and native Linux are first-class deployment targets
+## ADR-0003: Arsitektur runtime PHP hibrida
 
 -   **Status:** Accepted
--   **Decision:** PHPX supports both native Linux installation and
-    containerized deployment. Neither is a second-class afterthought.
--   **Context:** Native deployments are useful for direct host
-    integration and low-overhead installations. Containers are central
-    to repeatable deployments and orchestration.
--   **Consequences:**
-    -   The same core binary and configuration model should work in both
-        environments.
-    -   Filesystem paths, signals, permissions, cgroups, and process
-        supervision must be tested in both.
-    -   Docker images must support non-root execution by default where
-        feasible.
-    -   Native packaging and service integration (for example systemd)
-        are documented separately from container orchestration.
-    -   Windows is not a v0.1 production target; Windows development may
-        use WSL2 or containers.
+-   **Keputusan:** PHPX mendukung dua backend runtime di balik abstraksi
+    runtime bersama:
+    1.  **Process Runtime:** PHP dieksekusi di proses OS terpisah yang
+        terawasi. Ini default dan baseline produksi.
+    2.  **Embedded Runtime:** PHP Embed SAPI dihosting melalui bridge nativ
+        yang dikendalikan ketat. Ini tetap eksperimental hingga lolos
+        gerbang kompatibilitas, isolasi, dan stabilitas.
+-   **Konteks:** Eksekusi process memberi batas kompatibilitas dan
+    isolasi-kesalahan yang lebih kuat. Embedding dapat mengurangi overhead
+    batas dan menyederhanakan beberapa bentuk deployment, tetapi membawa
+    kompleksitas ABI, lifecycle, thread-safety, ekstensi, dan containment crash.
+-   **Konsekuensi:**
+    -   Pemilihan runtime eksplisit di konfigurasi; tanpa peralihan backend diam-diam.
+    -   Kedua backend mengimplementasikan kontrak lifecycle dan eksekusi
+        yang menghadap platform yang sama di mana semantik benar-benar cocok.
+    -   Kapabilitas spesifik-backend diiklankan, bukan diasumsikan.
+    -   Eksekusi embedded harus memakai domain eksekusi terkendali. PHP
+        NTS tidak boleh dimasuki konkuren dari thread Tokio sembarang.
+    -   Batas process tetap tersedia untuk workload tak tepercaya atau
+        sensitif-crash.
+    -   Backend embedded tidak bisa menjadi default hanya karena sebuah
+        microbenchmark lebih cepat.
 
-## ADR-0006: Tokio orchestration, isolated blocking execution
-
--   **Status:** Accepted
--   **Decision:** Tokio is used for asynchronous platform I/O and
-    orchestration. PHP execution and other blocking operations run
-    outside Tokio worker threads.
--   **Context:** PHP execution is not an async Tokio future and can
-    block for arbitrary durations.
--   **Consequences:**
-    -   Process workers communicate over bounded IPC channels.
-    -   Embedded PHP, if used, runs in dedicated controlled threads or
-        execution domains with serialized access according to the PHP
-        build and SAPI constraints.
-    -   Backpressure and bounded queues are mandatory.
-    -   Cancellation of an HTTP request does not imply unsafe
-        interruption of an executing PHP interpreter; timeout handling
-        is backend-specific and documented.
-
-## ADR-0007: HTTP gateway implementation
+## ADR-0004: Kompatibilitas aplikasi PHP yang ketat
 
 -   **Status:** Accepted
--   **Decision:** Use Hyper with Tokio for the initial HTTP gateway, and
-    Rustls for TLS.
--   **Context:** These components provide a modular Rust HTTP foundation
-    without requiring PHP to own the network listener.
--   **Consequences:**
-    -   HTTP/1.1 is mandatory for v0.1; HTTP/2 is a target subject to
+-   **Keputusan:** PHPX menarget aplikasi PHP konvensional tanpa modifikasi.
+    API spesifik-platform adalah peningkatan opsional dan tidak pernah
+    disyaratkan untuk eksekusi baseline.
+-   **Konteks:** Platform harus berguna bagi ekosistem PHP yang ada,
+    terutama Laravel, WordPress, dan WooCommerce.
+-   **Konsekuensi:**
+    -   PHPX harus menjaga semantik request PHP normal, variabel
+        environment, perilaku document-root/front-controller, header,
+        cookie, body request, kode status, dan perilaku error.
+    -   Kompatibilitas diverifikasi memakai fixture aplikasi asli dan
+        matriks ekstensi.
+    -   PHPX tidak menjanjikan kompatibilitas dengan setiap ekstensi atau
+        setiap perilaku SAPI PHP di v0.1.
+    -   Perilaku tak didukung harus didokumentasikan tepat; PHPX harus
+        gagal jelas alih-alih diam-diam mengubah semantik aplikasi.
+    -   API PHPX opsional butuh versionalisasi dan tidak bisa menjadi
+        prasyarat hosting aplikasi biasa.
+
+## ADR-0005: Docker dan Linux nativ adalah target deployment kelas-satu
+
+-   **Status:** Accepted
+-   **Keputusan:** PHPX mendukung instalasi Linux nativ maupun deployment
+    terkontainerisasi. Tidak ada yang menjadi warga kelas-dua.
+-   **Konteks:** Deployment nativ berguna untuk integrasi host langsung dan
+    instalasi overhead-rendah. Kontainer sentral untuk deployment berulang
+    dan orkestrasi.
+-   **Konsekuensi:**
+    -   Binary inti dan model konfigurasi yang sama harus bekerja di kedua
+        lingkungan.
+    -   Path filesystem, sinyal, perizinan, cgroup, dan supervisi proses
+        harus diuji di keduanya.
+    -   Image Docker harus mendukung eksekusi non-root secara default bila
+        memungkinkan.
+    -   Packaging nativ dan integrasi layanan (mis. systemd)
+        didokumentasikan terpisah dari orkestrasi kontainer.
+    -   Windows bukan target produksi v0.1; pengembangan Windows boleh
+        memakai WSL2 atau kontainer.
+
+## ADR-0006: Orkestrasi Tokio, eksekusi blocking terisolasi
+
+-   **Status:** Accepted
+-   **Keputusan:** Tokio dipakai untuk I/O platform dan orkestrasi async.
+    Eksekusi PHP dan operasi blocking lain berjalan di luar thread worker
+    Tokio.
+-   **Konteks:** Eksekusi PHP bukan future Tokio async dan bisa memblokir
+    selama durasi sembarang.
+-   **Konsekuensi:**
+    -   Worker process berkomunikasi lewat kanal IPC terbatas.
+    -   PHP embedded, bila dipakai, berjalan di thread khusus terkendali
+        atau domain eksekusi dengan akses terserial sesuai batasan build
+        PHP dan SAPI.
+    -   Backpressure dan antrean terbatas hukumnya wajib.
+    -   Pembatalan request HTTP tidak menyiratkan interupsi tak aman
+        terhadap interpreter PHP yang sedang mengeksekusi; penanganan
+        timeout spesifik-backend dan terdokumentasi.
+
+## ADR-0007: Implementasi gateway HTTP
+
+-   **Status:** Accepted
+-   **Keputusan:** Pakai Hyper dengan Tokio untuk gateway HTTP awal, dan
+    Rustls untuk TLS.
+-   **Konteks:** Komponen ini memberi fondasi HTTP Rust modular tanpa
+    mengharuskan PHP memiliki network listener.
+-   **Konsekuensi:**
+    -   HTTP/1.1 wajib untuk v0.1; HTTP/2 adalah target yang tunduk pada
         integration testing.
-    -   HTTP/3 is out of scope for v0.1.
-    -   Static file serving, request limits, graceful shutdown, and PHP
-        front-controller dispatch are part of the gateway.
-    -   Reverse proxy and advanced edge features are deferred.
+    -   HTTP/3 di luar lingkup v0.1.
+    -   Serving file statik, batas request, shutdown graceful, dan dispatch
+        front-controller PHP adalah bagian gateway.
+    -   Reverse proxy dan fitur edge lanjutan ditunda.
 
-## ADR-0008: Configuration format and compatibility
-
--   **Status:** Accepted
--   **Decision:** Use TOML for the primary human-authored configuration
-    file, with Serde-based typed deserialization and explicit schema
-    validation.
--   **Context:** Operators need a readable, reviewable configuration
-    format.
--   **Consequences:**
-    -   Configuration has an explicit schema version.
-    -   Unknown or invalid critical values fail fast with actionable
-        errors.
-    -   Defaults are documented and stable.
-    -   Environment-variable overrides use a documented naming
-        convention.
-    -   Secrets should be supplied through environment variables or
-        secret mounts, not committed to TOML files.
-
-## ADR-0009: Queue durability and storage adapters
+## ADR-0008: Format konfigurasi dan kompatibilitas
 
 -   **Status:** Accepted
--   **Decision:** Queue and storage are pluggable interfaces. SQLite is
-    the initial durable single-node queue backend; Redis is an optional
-    adapter. In-memory queue is development-only.
--   **Context:** A platform queue must not lose acknowledged jobs on
-    process restart.
--   **Consequences:**
-    -   Job state transitions, retries, leases/visibility timeouts, and
-        dead-letter handling require transactional semantics.
-    -   The in-memory driver is explicitly marked non-durable.
-    -   PostgreSQL and other distributed backends are deferred.
-    -   Filesystem and S3-compatible storage adapters are introduced
-        incrementally.
+-   **Keputusan:** Pakai TOML untuk file konfigurasi utama yang ditulis
+    manusia, dengan deserialisasi bertipe berbasis Serde dan validasi skema
+    eksplisit.
+-   **Konteks:** Operator butuh format konfigurasi yang terbaca dan dapat direview.
+-   **Konsekuensi:**
+    -   Konfigurasi punya versi skema eksplisit.
+    -   Nilai kritis tak dikenal atau tak valid gagal cepat dengan error
+        actionable.
+    -   Default didokumentasikan dan stabil.
+    -   Override environment-variable memakai konvensi penamaan
+        terdokumentasi.
+    -   Secret sebaiknya dipasok lewat environment variable atau secret
+        mount, bukan di-commit ke file TOML.
 
-## ADR-0010: Observability is built in
-
--   **Status:** Accepted
--   **Decision:** Structured logs, request correlation, metrics, and
-    tracing are platform capabilities, not optional afterthoughts.
--   **Context:** A runtime platform must be diagnosable under real
-    production load.
--   **Consequences:**
-    -   Use the Rust `tracing` ecosystem.
-    -   Expose Prometheus-compatible metrics.
-    -   Add OpenTelemetry integration incrementally.
-    -   Never log secrets, authorization headers, or sensitive request
-        payloads by default.
-    -   Runtime and worker metrics must be attributable to an
-        application and worker.
-
-## ADR-0011: Security and resource isolation
+## ADR-0009: Durabilitas antre dan adapter storage
 
 -   **Status:** Accepted
--   **Decision:** PHPX applies explicit resource limits and
-    least-privilege execution. A PHP worker must not inherit unnecessary
-    privileges from the platform supervisor.
--   **Context:** PHP applications and extensions execute arbitrary
-    application code and may be compromised.
--   **Consequences:**
-    -   Configure execution timeout, memory limit, worker count, request
-        size, and queue limits.
-    -   Support non-root operation.
-    -   Separate supervisor privileges from application worker
-        privileges where practical.
-    -   Document that PHP `memory_limit` is not a complete OS-level
-        memory boundary.
-    -   Container/cgroup limits and OS sandboxing are recommended for
-        untrusted tenants.
-    -   Multi-tenant hostile-code isolation is not claimed by v0.1.
+-   **Keputusan:** Queue dan storage adalah antarmuka pluggable. SQLite
+    adalah backend antre tahan-lama awal satu-node; Redis adalah adapter
+    opsional. Antre in-memory hanya untuk pengembangan.
+-   **Konteks:** Antre platform tidak boleh kehilangan job yang sudah
+    di-acknowledge saat proses restart.
+-   **Konsekuensi:**
+    -   Transisi state job, retry, lease/visibility timeout, dan
+        penanganan dead-letter butuh semantik transaksional.
+    -   Driver in-memory ditandai eksplisit non-durable.
+    -   PostgreSQL dan backend terdistribusi lain ditunda.
+    -   Adapter storage filesystem dan kompatibel-S3 diperkenalkan
+        bertahap.
 
-## ADR-0012: Modular Rust workspace and feature-gated subsystems
+## ADR-0010: Observabilitas bawaan
 
 -   **Status:** Accepted
--   **Decision:** Use a Cargo workspace with small crates organized
-    around stable subsystem boundaries. Optional platform features are
-    enabled through Cargo features and runtime configuration where
-    appropriate.
--   **Context:** A monolithic crate would make testing and ownership
-    difficult; excessive fragmentation too early would slow development.
--   **Consequences:**
-    -   Start with a small set of foundational crates and split only
-        when boundaries are clear.
-    -   Avoid cyclic dependencies.
-    -   Keep runtime contracts in a low-level crate.
-    -   Optional adapters must not be mandatory dependencies of the
-        minimal server.
+-   **Keputusan:** Log terstruktur, korelasi request, metrik, dan tracing
+    adalah kapabilitas platform, bukan renungan opsional.
+-   **Konteks:** Platform runtime harus dapat didiagnosis di bawah beban
+    produksi nyata.
+-   **Konsekuensi:**
+    -   Pakai ekosistem Rust `tracing`.
+    -   Ekspos metrik kompatibel-Prometheus.
+    -   Tambah integrasi OpenTelemetry bertahap.
+    -   Jangan pernah mencatat secret, header otorisasi, atau payload
+        request sensitif secara default.
+    -   Metrik runtime dan worker harus dapat diatribusikan ke aplikasi
+        dan worker.
 
-## ADR-0013: Release and compatibility policy
+## ADR-0011: Keamanan dan isolasi resource
 
 -   **Status:** Accepted
--   **Decision:** PHPX follows semantic versioning after its first
-    stable release. Before 1.0, configuration and CLI may evolve, but
-    breaking changes must be documented.
--   **Context:** Operators need predictable upgrades and developers need
-    to understand compatibility guarantees.
--   **Consequences:**
-    -   v0.1 is an experimental developer preview, not a
-        production-support promise.
-    -   Every release publishes supported Rust, PHP, OS, and extension
-        matrices.
-    -   Runtime backend capability differences are documented.
-    -   Compatibility tests are release gates.
+-   **Keputusan:** PHPX menerapkan batas resource eksplisit dan eksekusi
+    least-privilege. Worker PHP tidak boleh mewarisi hak tak perlu dari
+    supervisor platform.
+-   **Konteks:** Aplikasi dan ekstensi PHP mengeksekusi kode aplikasi
+    sembarang dan bisa terkompromi.
+-   **Konsekuensi:**
+    -   Konfigurasikan timeout eksekusi, batas memori, jumlah worker, ukuran
+        request, dan batas antre.
+    -   Dukung operasi non-root.
+    -   Pisahkan hak supervisor dari hak worker aplikasi bila praktis.
+    -   Dokumentasikan bahwa `memory_limit` PHP bukan batas memori level-OS
+        yang lengkap.
+    -   Batas container/cgroup dan sandboxing OS direkomendasikan untuk
+        tenant tak tepercaya.
+    -   Isolasi kode-bermusuhan multi-tenant tidak diklaim oleh v0.1.
 
-## ADR-0014: Worker lifecycle, resource management and adaptive recycling (Proposed)
+## ADR-0012: Workspace Rust modular dan subsistem feature-gated
 
--   **Status:** Proposed (not yet part of Accepted baseline)
--   **Decision:** Add Runtime Health and Memory Guardian to Process
-    Runtime. Canonical lifecycle is `Starting -> Ready -> Busy -> Ready`,
-    with `Ready/Busy -> Draining -> Stopped`,
-    `Busy -> Unhealthy -> Restarting -> Ready`, and
-    `Starting -> Failed`. `Failed` is terminal for that worker
-    incarnation with operator-visible diagnostics. See
-    `adr/0014-worker-lifecycle-resource-management.md` for full rationale
-    (Sundanese body + normative English abstract).
--   **Context:** Persistent PHP workers risk cross-request state leakage
-    and memory growth. Resource control is the realistic PHPX
-    differentiator, not automatic speedup.
--   **Consequences:**
-    -   Bounded pool + bounded queue + backpressure remain mandatory.
-        Default is one concurrent request per process worker.
-    -   Soft memory threshold triggers graceful recycle; hard threshold
-        allows protective termination. Overshoot is possible due to
-        sampling/termination latency and must be documented.
-    -   Restart uses exponential backoff + jitter + restart budget +
-        circuit breaker to avoid infinite respawn loops.
-    -   Detailed lifecycle/memory/adaptive keys live under
-        `[runtime.process.lifecycle]`, `[runtime.process.memory]`, and
-        `[runtime.process.adaptive]` (adaptive `enabled = false` by
-        default). SPEC Section 8 example is simplified and points here
-        for the full model.
-    -   Benchmarks for this work compare against FrankenPHP, RoadRunner,
-        Swoole/OpenSwoole, and Nginx + PHP-FPM on identical builds with
-        p50/p95/p99/max, RSS, restarts, and recovery metrics. No parity
-        claim without repeatable results.
-    -   Until accepted, SPEC Section 5 remains normative for v0.1
-        baseline; ADR-0014 refines it.
+-   **Status:** Accepted
+-   **Keputusan:** Pakai workspace Cargo dengan crate kecil yang
+    diorganisasi di sekitar batas subsistem stabil. Fitur platform opsional
+    dinyalakan lewat fitur Cargo dan konfigurasi runtime bila sesuai.
+-   **Konteks:** Crate monolitik akan menyulitkan testing dan ownership;
+    fragmentasi berlebih terlalu dini akan memperlambat pengembangan.
+-   **Konsekuensi:**
+    -   Mulai dengan set kecil crate fondasional dan belah hanya bila
+        batasnya jelas.
+    -   Hindari dependensi siklik.
+    -   Jaga kontrak runtime di crate level-rendah.
+    -   Adapter opsional tidak boleh menjadi dependensi wajib server minimal.
 
-## Deferred decisions
+## ADR-0013: Kebijakan rilis dan kompatibilitas
 
-The following are intentionally not fixed in v0.1:
+-   **Status:** Accepted
+-   **Keputusan:** PHPX mengikuti semantic versioning setelah rilis stabil
+    pertamanya. Sebelum 1.0, konfigurasi dan CLI boleh berevolusi, tetapi
+    perubahan breaking harus didokumentasikan.
+-   **Konteks:** Operator butuh upgrade yang dapat diprediksi dan developer
+    perlu memahami garansi kompatibilitas.
+-   **Konsekuensi:**
+    -   v0.1 adalah developer preview eksperimental, bukan janji dukungan
+        produksi.
+    -   Setiap rilis mempublikasikan matriks Rust, PHP, OS, dan ekstensi
+        yang didukung.
+    -   Perbedaan kapabilitas backend runtime didokumentasikan.
+    -   Test kompatibilitas adalah gerbang rilis.
 
--   Final embedded PHP ABI strategy and supported PHP build variants.
--   Whether PHP-CGI, PHP CLI worker protocol, or FastCGI is the
-    preferred process transport in every deployment.
--   Distributed queue semantics and PostgreSQL driver.
--   Windows native support.
+## ADR-0014: Siklus hidup worker, manajemen resource dan recycling adaptif (Proposed)
+
+-   **Status:** Proposed (belum menjadi bagian baseline Accepted; sebagian
+    besar isinya — lifecycle terawasi, guardian memori, autoscale adaptif —
+    sudah terimplementasi di P0-B/P0-C/P2 dan dipin oleh test)
+-   **Keputusan:** Tambahkan Runtime Health dan Memory Guardian ke Process
+    Runtime. Siklus kanonis adalah `Starting -> Ready -> Busy -> Ready`,
+    dengan `Ready/Busy -> Draining -> Stopped`,
+    `Busy -> Unhealthy -> Restarting -> Ready`, dan
+    `Starting -> Failed`. `Failed` terminal untuk inkarnasi worker itu
+    dengan diagnostik yang terlihat operator. Lihat
+    `adr/0014-worker-lifecycle-resource-management.md` untuk rasional penuh.
+-   **Konteks:** Worker PHP persistent berisiko bocor state lintas-request
+    dan tumbuh memori. Kontrol resource adalah diferensiator PHPX yang
+    realistis, bukan speedup otomatis.
+-   **Konsekuensi:**
+    -   Pool terbatas + antre terbatas + backpressure tetap wajib.
+        Default satu request konkuren per worker process.
+    -   Ambang memori soft memicu recycle graceful; ambang hard
+        memungkinkan terminasi protektif. Overshoot mungkin terjadi karena
+        latensi sampling/terminasi dan harus didokumentasikan.
+    -   Restart memakai exponential backoff + jitter + budget restart +
+        circuit breaker agar tak ada loop respawn tak berujung.
+    -   Kunci lifecycle/memori/adaptif detail hidup di bawah
+        `[runtime.process.lifecycle]`, `[runtime.process.memory]`, dan
+        `[runtime.process.adaptive]` (adaptif `enabled = false` secara
+        default). Contoh SPEC Seksi 8 disederhanakan dan menunjuk ke sini
+        untuk model penuh.
+    -   Benchmark pekerjaan ini membandingkan dengan FrankenPHP, RoadRunner,
+        Swoole/OpenSwoole, dan Nginx + PHP-FPM pada build identik dengan
+        p50/p95/p99/max, RSS, restart, dan metrik recovery. Tanpa klaim
+        paritas tanpa hasil berulang.
+    -   Hingga diterima, SPEC Seksi 5 tetap normatif untuk baseline v0.1;
+        ADR-0014 menyempurnakannya.
+
+## Keputusan yang ditunda
+
+Berikut ini sengaja tidak ditetapkan di v0.1:
+
+-   Strategi ABI embedded PHP final dan varian build PHP yang didukung
+    (pin ABI selesai — NTS non-debug 8.3-8.5; link nativ CI tetap ditunda).
+-   Apakah PHP-CGI, protokol worker PHP CLI, atau FastCGI adalah transport
+    process pilihan di setiap deployment.
+-   Semantik queue terdistribusi dan driver PostgreSQL.
+-   Dukungan nativ Windows.
 -   HTTP/3.
--   Multi-tenant hostile-code sandbox guarantees.
--   Plugin ABI stability.
+-   Garansi sandbox kode-bermusuhan multi-tenant.
+-   Stabilitas ABI plugin.
 
-These decisions require prototypes and evidence rather than assumptions.
-
+Keputusan ini butuh prototipe dan bukti, bukan asumsi.

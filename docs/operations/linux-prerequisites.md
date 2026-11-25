@@ -1,13 +1,13 @@
-# Linux development prerequisites (M0)
+# Prasyarat pengembangan Linux (M0)
 
-Target: Ubuntu 22.04+ / Debian 12+ (x86_64), Docker optional.
+Target: Ubuntu 22.04+ / Debian 12+ (x86_64), Docker opsional.
 
-## 1. Rust (pinned)
+## 1. Rust (ter-pin)
 
-- Install via rustup: https://rustup.rs
-- Pinned toolchain: see `rust-toolchain.toml` (currently 1.99.1).
-- Components: `rustfmt`, `clippy`.
-- Target for cross-checks: `x86_64-unknown-linux-gnu` (default on Linux).
+- Instal via rustup: https://rustup.rs
+- Toolchain ter-pin: lihat `rust-toolchain.toml` (saat ini 1.99.1).
+- Komponen: `rustfmt`, `clippy`.
+- Target untuk cek-silangan: `x86_64-unknown-linux-gnu` (default di Linux).
 
 ```bash
 rustup show
@@ -21,23 +21,23 @@ php --version
 php -m
 ```
 
-- Required for `phpx doctor`: `php` in PATH or set `PHPX_PHP_BIN`.
-- Useful extensions for M0 doctor: `json mbstring curl openssl pdo`.
-- Full extension matrix is validated per release (see SPEC 2.2).
+- Diperlukan untuk `phpx doctor`: `php` di PATH atau set `PHPX_PHP_BIN`.
+- Ekstensi berguna untuk doctor M0: `json mbstring curl openssl pdo`.
+- Matriks ekstensi penuh divalidasi per rilis (lihat SPEC 2.2).
 
-## 3. System tools
+## 3. Perkakas sistem
 
 ```bash
 sudo apt update && sudo apt install -y build-essential pkg-config git curl
 ```
 
-Docker (for container parity, ADR-0005):
+Docker (untuk paritas container, ADR-0005):
 
 ```bash
 docker --version
 ```
 
-## 4. M0 checks
+## 4. Cek M0
 
 ```bash
 cargo fmt --check
@@ -47,4 +47,4 @@ cargo test --workspace
 ./target/debug/phpx serve --config phpx.toml.example
 ```
 
-Windows/macOS dev may use WSL2 or Docker Desktop; production target stays Linux/Docker.
+Dev Windows/macOS boleh memakai WSL2 atau Docker Desktop; target produksi tetap Linux/Docker.

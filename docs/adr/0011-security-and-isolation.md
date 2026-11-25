@@ -1,19 +1,20 @@
-## ADR-0011: Security and resource isolation
+## ADR-0011: Keamanan dan isolasi sumber daya
 
--   **Status:** Accepted
--   **Decision:** PHPX applies explicit resource limits and
-    least-privilege execution. A PHP worker must not inherit unnecessary
-    privileges from the platform supervisor.
--   **Context:** PHP applications and extensions execute arbitrary
-    application code and may be compromised.
--   **Consequences:**
-    -   Configure execution timeout, memory limit, worker count, request
-        size, and queue limits.
-    -   Support non-root operation.
-    -   Separate supervisor privileges from application worker
-        privileges where practical.
-    -   Document that PHP `memory_limit` is not a complete OS-level
-        memory boundary.
-    -   Container/cgroup limits and OS sandboxing are recommended for
-        untrusted tenants.
-    -   Multi-tenant hostile-code isolation is not claimed by v0.1.
+-   **Status:** Diterima (Accepted)
+-   **Keputusan:** PHPX menerapkan batas sumber daya yang eksplisit dan
+    eksekusi dengan hak istimewa minimal (least-privilege). Worker PHP
+    tidak boleh mewarisi hak istimewa yang tidak perlu dari supervisor
+    platform.
+-   **Konteks:** Aplikasi dan ekstensi PHP mengeksekusi kode aplikasi
+    sembarang dan dapat dikompromikan.
+-   **Konsekuensi:**
+    -   Konfigurasikan timeout eksekusi, batas memori, jumlah worker,
+        ukuran request, dan batas antrean.
+    -   Dukung operasi non-root.
+    -   Pisahkan hak istimewa supervisor dari hak istimewa worker
+        aplikasi sejauh praktis.
+    -   Dokumentasikan bahwa `memory_limit` PHP bukan batas memori
+        setingkat OS yang utuh.
+    -   Batas kontainer/cgroup dan sandboxing OS direkomendasikan untuk
+        tenant yang tidak tepercaya.
+    -   Isolasi kode bermusuhan multi-tenant tidak diklaim oleh v0.1.

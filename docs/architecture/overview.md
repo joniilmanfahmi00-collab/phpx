@@ -1,40 +1,44 @@
-# PHPX Architecture Overview (M1-M5 complete + M6.1 stub, developer preview)
+# Gambaran Arsitektur PHPX (M1-M5 selesai + P0-P2 + M6 serve path, developer preview)
 
-M0 scope: buildable Rust workspace, config v1, `phpx doctor` / `phpx serve` skeleton — DONE.
-M1 scope: Process Runtime prototype over one-shot PHP + BoundedPool — DONE, see `docs/architecture/m1-notes.md`.
-M2 scope: Tokio + Hyper HTTP/1.1 gateway, front-controller routing, safe static serving, PHP dispatch via pool, backpressure 503, graceful drain, TLS via Rustls - DONE, see m2-notes.md. HTTP/2 is deferred, not claimed in M2.
-M3 scope: Developer preview v0.1 - finalized serve/doctor, runtime/workers status, documented TOML defaults, non-root Docker, systemd unit, PHP matrix, smoke + baseline bench, /healthz + /readyz - DONE, see m3-notes.md. v0.1 is developer preview, not production SLA.
-M4 scope: Worker hardening + app compat - min/max pool, queue/drain/restart policy, crash-loop circuit, /metrics, SAPI-compat bootstrap ($_GET/$_COOKIE/$_SERVER), Composer/Laravel/WP/Woo fixtures, compat matrix, soak runbook - DONE, see m4-notes.md.
-M5 phase 1 scope: durable queue (memory + sqlite, retries/backoff/dead-letter, lease recovery, `queue status|push|work` real) - DONE, see `docs/operations/queue.md`.
-M5 phase 2 scope: timezone-aware cron scheduler, single-pass dispatch-only, history dedup - DONE, see `docs/operations/scheduler.md` + `docs/architecture/m5-notes.md`.
-M5 phase 3 scope: bounded cache (memory + filesystem, TTL) + storage (local real, s3 prototype) - DONE, see `docs/operations/cache.md` + `docs/operations/storage.md`.
-M6.1 stub scope: embedded capability reporting + single-entry domain + shared contract tests - DONE (native php-embed linking deferred), see docs/operations/embedded.md.
+Lingkup M0: workspace Rust yang dapat dibangun, config v1, kerangka `phpx doctor` / `phpx serve` — DONE.
+Lingkup M1: prototipe Process Runtime di atas PHP one-shot + BoundedPool — DONE, lihat `docs/architecture/m1-notes.md`.
+Lingkup M2: gateway HTTP/1.1 Tokio + Hyper, routing front-controller, serving statik aman, dispatch PHP via pool, backpressure 503, drain graceful, TLS via Rustls - DONE, lihat m2-notes.md. HTTP/2 ditunda, tidak diklaim di M2.
+Lingkup M3: Developer preview v0.1 - serve/doctor final, status runtime/workers, default TOML terdokumentasi, Docker non-root, unit systemd, matriks PHP, smoke + bench baseline, /healthz + /readyz - DONE, lihat m3-notes.md. v0.1 adalah developer preview, bukan SLA produksi.
+Lingkup M4: Hardening worker + kompat app - pool min/max, kebijakan queue/drain/restart, sirkuit crash-loop, /metrics, bootstrap SAPI-compat ($_GET/$_COOKIE/$_SERVER), fixture Composer/Laravel/WP/Woo, matriks kompat, runbook soak - DONE, lihat m4-notes.md.
+Lingkup M5 fase 1: queue tahan lama (memory + sqlite, retry/backoff/dead-letter, recovery lease, `queue status|push|work` nyata) - DONE, lihat `docs/operations/queue.md`.
+Lingkup M5 fase 2: scheduler cron sadar-timezone, single-pass dispatch-only, dedup history - DONE, lihat `docs/operations/scheduler.md` + `docs/architecture/m5-notes.md`.
+Lingkup M5 fase 3: cache terbatas (memory + filesystem, TTL) + storage (local nyata, s3 prototipe) - DONE, lihat `docs/operations/cache.md` + `docs/operations/storage.md`.
+Lingkup P0 (remediasi engineering): mode eksekusi eksplisit (P0-A), pool persistent terawasi (P0-B), guardian RSS + batas memori (P0-C), app asli Laravel/WP/Woo (P0-D) - DONE.
+Lingkup P1: matriks resiliensi 9 test + ambang penerimaan (P1-A), bench lab + repeat + multipart + Redis (P1-B) - DONE.
+Lingkup P2: pool adaptif opt-in + serve path embedded terkabel (EmbeddedPool single-flight, `runtime.mode=embedded`, 9/9 gerbang linked) - DONE, lihat `docs/operations/embedded.md`.
+Lingkup M6: runtime embedded — dahulunya stub kapasitas (M6.1), kini live pada build linked (lihat `docs/operations/embedded.md`); link nativ CI tetap ditunda.
 
-## Subsystems (SPEC 3.1, ADR-0002/0003/0012)
+## Subsistem (SPEC 3.1, ADR-0002/0003/0012)
 
-- `phpx-cli` (M5): `serve [--host --port]`, `doctor` (+SAPI/ext audit), `version`, `runtime list|inspect` (M4 fields + M6.1 embedded capabilities), `workers status|reload` (min/max/bounds/policy + drain), `queue status|push|work` (M5 phase 1 real), `scheduler run [--dry-run] [--catchup-window-secs N]` (M5 phase 2 real single-pass), `metrics` (logs + /healthz + /readyz + /metrics).
-- `phpx-core`: errors, app identity, structured logging (tracing).
-- `phpx-config`: TOML schema v1, validation, `phpx.toml.example` (incl. scheduler keys + history_file).
-- `phpx-runtime`: versioned envelope + 4-byte BE framing, 16 MiB cap, PROTOCOL_VERSION=1.
-- `phpx-runtime-process`: PHP discovery + `execute_one_shot` (M1 default).
-- `phpx-worker`: `BoundedPool` hardened (M4: min/max, drain, restart budget + backoff/jitter + circuit breaker, recycled/snapshot/Prometheus).
-- `phpx-server` (M4): Hyper gateway + /healthz + /readyz + /metrics, SAPI-compat dispatch, Ctrl-C/SIGTERM graceful drain, access logs with x-request-id.
-- `phpx-queue` (M5 phase 1 real): `QueueDriver` trait, memory + sqlite, bounded retries/backoff/lease/dead-letter.
-- `phpx-cache` (M5 phase 3 real): `CacheDriver` trait, memory + filesystem, TTL, bounded eviction.
-- `phpx-storage` (M5 phase 3 real): `StorageDriver` trait, local FS real, s3 prototype (config real, transport deferred).
-- `phpx-scheduler` (M5 phase 2 real): cron + timezone + history dedup, dispatch-only, never executes PHP.
-- Future: `phpx-observability`. See SPEC 14 mapping note. (Embedded stub lives in phpx-runtime-embedded since M6.1.)
+- `phpx-cli`: `serve [--host --port]`, `doctor` (+audit SAPI/ext), `version`, `runtime list|inspect` (field process + kemampuan embedded), `workers status|reload` (min/max/bound/kebijakan + drain), `queue status|push|work` (nyata), `scheduler run [--dry-run] [--catchup-window-secs N]` (nyata single-pass), `metrics` (log + /healthz + /readyz + /metrics), `cache`, `storage`.
+- `phpx-core`: error, identitas app, logging terstruktur (tracing).
+- `phpx-config`: skema TOML v1, validasi, `phpx.toml.example`.
+- `phpx-runtime`: envelope berversi + framing BE 4-byte, cap 16 MiB, PROTOCOL_VERSION=1.
+- `phpx-runtime-process`: discovery PHP + `execute_one_shot`.
+- `phpx-worker`: `BoundedPool` + `PersistentPool` terawasi (min/max, drain, budget restart + backoff/jitter + circuit breaker, recycled/snapshot/Prometheus) + `EmbeddedPool` single-flight (P2) + guardian memori + autoscale adaptif opt-in.
+- `phpx-server` (M4): gateway Hyper + /healthz + /readyz + /metrics, dispatch SAPI-compat, drain graceful Ctrl-C/SIGTERM, access log dengan x-request-id; memilih pool process vs embedded dari `runtime.mode`.
+- `phpx-queue` (nyata): trait `QueueDriver`, memory + sqlite + redis, retry/backoff/lease/dead-letter terbatas.
+- `phpx-cache` (nyata): trait `CacheDriver`, memory + filesystem + redis, TTL, eviksi terbatas.
+- `phpx-storage` (nyata): trait `StorageDriver`, FS lokal nyata, s3 prototipe (config nyata, transport ditunda).
+- `phpx-scheduler` (nyata): cron + timezone + dedup history, dispatch-only, tidak pernah mengeksekusi PHP.
+- `phpx-runtime-embedded` (P2 live): engine libphp in-process pada satu thread khusus, `live::serve_with_timeout`, asesor gerbang `gates::assess()`.
+- Masa depan: `phpx-observability`. Lihat catatan pemetaan SPEC 14.
 
-## Contracts
+## Kontrak
 
-- Config schema v1: `schema_version = 1`, bounded workers (1-1024), no unbounded queues.
-- Lifecycle: `Starting -> Ready -> Busy -> Ready`, `Ready/Busy -> Draining -> Stopped`, `Busy -> Unhealthy -> Restarting -> Ready`, `Starting -> Failed` terminal incarnation (SPEC 5.1 + ADR-0014 Proposed).
-- Tokio: async orchestration only, blocking PHP off executor threads via `spawn_blocking` (ADR-0006). Scheduler never runs PHP on gateway threads (SPEC 7.2: dispatch-only, single pass + systemd timer).
-- Backpressure mandatory (SPEC 5.3, ADR-0014 2.2): overload maps to HTTP 503, never unbounded queue. Queue depth max 10,000; scheduler max 100 schedules, 1 catchup job per schedule per tick.
-- Static safety (SPEC 6.3): canonicalize + `starts_with` docroot check, reject traversal, never serve `.php` raw.
-- TLS (SPEC 6.1, ADR-0007): Rustls; `tls=true` requires cert/key files, else clear error; plain HTTP for tests; HTTP/2 deferred.
+- Skema config v1: `schema_version = 1`, worker terbatas (1-1024), tanpa antrean tak terbatas.
+- Siklus hidup: `Starting -> Ready -> Busy -> Ready`, `Ready/Busy -> Draining -> Stopped`, `Busy -> Unhealthy -> Restarting -> Ready`, `Starting -> Failed` inkarnasi terminal (SPEC 5.1 + ADR-0014).
+- Tokio: hanya orkestrasi async, PHP blocking di luar thread eksekutor via `spawn_blocking` (ADR-0006). Scheduler tidak pernah menjalankan PHP di thread gateway (SPEC 7.2: dispatch-only, single pass + systemd timer). Engine embedded berjalan pada satu thread OS khusus, bukan thread gateway.
+- Backpressure wajib (SPEC 5.3, ADR-0014 2.2): overload dipetakan ke HTTP 503, bukan antrean tak terbatas. Kedalaman antre maks 10.000; scheduler maks 100 jadwal, 1 job catchup per jadwal per tick.
+- Keamanan statik (SPEC 6.3): kanonikalisasi + cek docroot `starts_with`, tolak traversal, jangan pernah sajikan `.php` mentah.
+- TLS (SPEC 6.1, ADR-0007): Rustls; `tls=true` butuh file cert/key, bila tidak error jelas; HTTP polos untuk test; HTTP/2 ditunda.
 
-## Decisions
+## Keputusan
 
-Accepted: ADR-0001..0013. Proposed: ADR-0014 (worker lifecycle + memory guardian).
-See `docs/ARCHITECTURE_DECISIONS.md` and `docs/adr/README.md`.
+Accepted: ADR-0001..0013. Proposed: ADR-0014 (siklus hidup worker + guardian memori).
+Lihat `docs/ARCHITECTURE_DECISIONS.md` dan `docs/adr/README.md`.

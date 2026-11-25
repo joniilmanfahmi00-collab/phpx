@@ -1,15 +1,15 @@
-## ADR-0013: Release and compatibility policy
+## ADR-0013: Kebijakan rilis dan kompatibilitas
 
--   **Status:** Accepted
--   **Decision:** PHPX follows semantic versioning after its first
-    stable release. Before 1.0, configuration and CLI may evolve, but
-    breaking changes must be documented.
--   **Context:** Operators need predictable upgrades and developers need
-    to understand compatibility guarantees.
--   **Consequences:**
-    -   v0.1 is an experimental developer preview, not a
-        production-support promise.
-    -   Every release publishes supported Rust, PHP, OS, and extension
-        matrices.
-    -   Runtime backend capability differences are documented.
-    -   Compatibility tests are release gates.
+-   **Status:** Diterima (Accepted)
+-   **Keputusan:** PHPX mengikuti semantic versioning setelah rilis stabil
+    pertamanya. Sebelum 1.0, konfigurasi dan CLI dapat berkembang, tetapi
+    perubahan yang merusak (breaking changes) harus didokumentasikan.
+-   **Konteks:** Operator membutuhkan upgrade yang dapat diprediksi dan
+    pengembang perlu memahami jaminan kompatibilitas.
+-   **Konsekuensi:**
+    -   v0.1 adalah pratinjau pengembang yang eksperimental, bukan janji
+        dukungan produksi.
+    -   Setiap rilis mempublikasikan matriks Rust, PHP, OS, dan ekstensi
+        yang didukung.
+    -   Perbedaan kapabilitas backend runtime didokumentasikan.
+    -   Uji kompatibilitas adalah gerbang rilis.
