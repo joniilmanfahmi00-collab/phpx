@@ -155,12 +155,12 @@ linked. Proves the gates hold in linked mode, not only in stub mode:
 ## Linked gate run (WSL Debian, 2026-11-24, P2 gates)
 
 - Toolchain: php-config 8.3.36 NTS + `/usr/include/php/20230831/sapi/embed/php_embed.h` + `libphp.so`; build log: `linked php-embed (php-config 8.3.36, libs=["php8.3", ...])`.
-- `PHPX_EMBED_LINK=1 cargo test -p phpx-runtime-embedded` = **42 lib + 16 contract + 5 linked-engine, all green WITH libphp linked** (was 28 + 12 on 2026-11-19; +14 from the P2 gate modules, +5 live execution proofs).
-- First live executions through the narrow bridge: boot, `6*7 = 42`, echo output capture, shared-executor leak pinned, bailout contained + engine reusable — all green, default parallel test threads.
-- Live `gates::assess()` on the linked build: **6 PASS + 3 HOLD, `available=false`** (fail-closed, correct):
-  - PASS: `abi_pin`, `native_link`, `execution_domain`, `ownership`, `containment`, `extensions` (live `php -m` 11/11 on the NTS build).
-  - HOLD: `isolation` (needs live Zend reset proof), `compat_parity` (no subset executes yet), `stability` (no archived linked soak).
-- Promotion flips mechanically when the three HOLDs turn PASS with archived evidence; no code path changes needed (`available()` derives from the assessor).
+- `PHPX_EMBED_LINK=1 cargo test -p phpx-runtime-embedded` = **42 lib + 16 contract + 8 linked, all green WITH libphp linked** (was 28 + 12 on 2026-11-19).
+- First live executions through the narrow bridge: boot, `6*7 = 42`, echo output capture, shared-executor leak pinned, request-cycle isolation (`set → cycle → clean`), vanilla fixture parity (`hello from phpx vanilla|rid=direct`), bailout containment + engine reuse, bailout → cycle recovery — all green, default parallel test threads (single dedicated engine thread; touching the engine from different OS threads trips Zend stack tracking after a bailout).
+- Live `gates::assess()` on the linked build: **7 PASS + 2 HOLD, `available=false`** (fail-closed, correct):
+  - PASS: `abi_pin`, `native_link`, `execution_domain`, `ownership`, `containment`, `extensions` (live `php -m` 11/11 on the NTS build), `isolation` (request-cycle reset proven live).
+  - HOLD: `compat_parity` (1/4 — vanilla live, rest need SAPI request plumbing), `stability` (no archived linked soak).
+- Promotion flips mechanically when the two HOLDs turn PASS with archived evidence; no code path changes needed (`available()` derives from the assessor).
 
 ## Live execution (P2 milestone, WSL-proven)
 
@@ -173,10 +173,17 @@ the narrow bridge — the first live PHPX embedded executions:
   (ub_write override targets the global `sapi_module` copy — overriding
   `php_embed_module` post-startup is a silent no-op because `sapi_startup()`
   copies the struct).
-- shared-executor reality: sequential evals share one executor, so
-  `$GLOBALS` set in eval N is visible in eval N+1 (pinned `leak`). This is
-  the documented isolation gap: flipping it needs the per-request reset
-  (future `phpx_embed_request` cycle or equivalent), not just eval.
+- shared-executor reality without a cycle: sequential evals share one
+  executor, so `$GLOBALS` set in eval N is visible in eval N+1 by design
+  (pinned `leak`).
+- request cycle (`phpx_embed_next_request`, balanced RINIT pair): shutdown +
+  startup hands back a fresh executor — `set → cycle → probe` reads `clean`
+  and stays clean across bailouts (`bailout → cycle → clean`). This is the
+  per-request isolation primitive the isolation gate is built on.
+  NEVER add an extra `request_shutdown` before `php_embed_shutdown`: it
+  already performs exactly one RSHUTDOWN, and the unbalanced extra one
+  corrupts the heap at teardown (observed in the C probe, pinned as a rule
+  in the shim).
 - FFI contract learned from `zend_execute_API.c`: with retval requested the
   engine wraps the snippet as `return <code>;` itself — statements go
   retval-NULL, bare expressions go with retval. Mixing them is a clean

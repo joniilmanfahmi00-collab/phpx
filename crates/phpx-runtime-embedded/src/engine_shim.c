@@ -65,17 +65,37 @@ static size_t phpx_ub_write(const char *str, size_t len) {
  */
 extern sapi_module_struct sapi_module;
 
+static int g_started = 0;
+
 int phpx_embed_startup(void) {
-    static int started = 0;
     static char *fake_argv[] = {(char *)"phpx-embed", NULL};
-    if (started) {
+    if (g_started) {
         return 0;
     }
     if (php_embed_init(1, fake_argv) != SUCCESS) {
         return 2;
     }
     sapi_module.ub_write = phpx_ub_write;
-    started = 1;
+    g_started = 1;
+    return 0;
+}
+
+/* End the current request and start a fresh one (balanced pair: exactly
+ * one RINIT active afterwards, same as after startup). Each fresh request
+ * gets a new executor: superglobals, symbol tables and user state do NOT
+ * cross the boundary — this is the per-request isolation primitive.
+ * Returns 0 ok, 1 startup failed, 2 engine not started.
+ * NEVER call an extra request_shutdown before embed_shutdown: it already
+ * performs exactly one RSHUTDOWN, and an unbalanced extra one corrupts
+ * the heap at teardown (observed). */
+int phpx_embed_next_request(void) {
+    if (!g_started) {
+        return 2;
+    }
+    php_request_shutdown(NULL);
+    if (php_request_startup() != SUCCESS) {
+        return 1;
+    }
     return 0;
 }
 

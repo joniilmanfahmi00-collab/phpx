@@ -85,14 +85,18 @@ pub fn assess() -> Vec<GateStatus> {
     gates.push(GateStatus {
         id: "isolation",
         name: "Request state isolation tests".to_string(),
-        pass: false,
-        evidence: "HOLD: IsolationScope lifecycle modeled and unit-proven (clean seal vs leak fail-closed); live Zend executor reset per request unproven without a hosted engine".to_string(),
+        pass: linked,
+        evidence: if linked {
+            "DONE: per-request executor reset via phpx_embed_next_request (balanced RINIT cycle; an unbalanced double-shutdown corrupts the heap — pinned). Linked tests prove clean separation (set → cycle → probe reads clean) and bailout → cycle recovery".to_string()
+        } else {
+            "HOLD: IsolationScope lifecycle modeled and unit-proven (clean seal vs leak fail-closed); live Zend executor reset needs a linked engine".to_string()
+        },
     });
     gates.push(GateStatus {
         id: "compat_parity",
         name: "Parity on the compatibility suite for every claimed capability".to_string(),
         pass: false,
-        evidence: "HOLD: subsets mirror M4 fixtures with per-subset blockers, but no subset executes through an engine yet (engine entry closed)".to_string(),
+        evidence: "HOLD: 1/4 subsets live — the vanilla fixture executes through the engine via include with pinned output (hello from phpx vanilla|rid=direct). laravel-minimal/wordpress-minimal/woocommerce-minimal need SAPI request plumbing ($_GET/$_POST/headers/cookies per request)".to_string(),
     });
     gates.push(GateStatus {
         id: "stability",
@@ -145,12 +149,20 @@ mod tests {
             !available(),
             "available must stay false until every gate passes"
         );
-        // Structural gates hold regardless of machine: isolation, parity and
-        // stability need a live engine plus archived evidence.
-        for id in ["isolation", "compat_parity", "stability"] {
+        // compat_parity and stability hold in every build: parity needs all
+        // four subsets, stability needs an archived soak. isolation follows
+        // the build: HOLD in stub (no engine to cycle), DONE when linked
+        // (request-cycle isolation proven live).
+        for id in ["compat_parity", "stability"] {
             let g = assess().into_iter().find(|g| g.id == id).unwrap();
-            assert!(!g.pass, "{id} must hold without a live engine");
+            assert!(!g.pass, "{id} must hold");
             assert!(g.evidence.contains("HOLD"), "{id} must say HOLD");
         }
+        let iso = assess().into_iter().find(|g| g.id == "isolation").unwrap();
+        assert_eq!(
+            iso.pass,
+            crate::is_build_linked(),
+            "isolation follows the build (stub HOLD, linked DONE)"
+        );
     }
 }
