@@ -1112,6 +1112,7 @@ dependencies = [
  "phpx-config",
  "phpx-core",
  "phpx-runtime",
+ "phpx-runtime-embedded",
  "phpx-runtime-process",
  "phpx-worker",
  "reqwest",
@@ -1141,6 +1142,7 @@ version = "0.1.0"
 dependencies = [
  "phpx-core",
  "phpx-runtime",
+ "phpx-runtime-embedded",
  "phpx-runtime-process",
  "serde",
  "serde_json",

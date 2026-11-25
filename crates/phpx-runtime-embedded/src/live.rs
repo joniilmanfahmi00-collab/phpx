@@ -166,18 +166,51 @@ fn engine_thread(
 /// the engine thread is gone (fail-closed, never silent).
 #[cfg(phpx_embed_linked)]
 fn run_on_engine(op: EngineOp) -> EngineOut {
+    run_on_engine_timeout(op, None)
+}
+
+/// Bounded variant: `timeout=None` waits forever (parity/eval paths);
+/// `Some(d)` returns a timeout outcome instead of blocking past the
+/// gateway's explicit execution budget. A timeout does NOT kill the engine
+/// thread (killing NTS mid-request corrupts Zend state): the long op runs
+/// to completion and later ops queue behind it. The gateway reports 504
+/// within the bound; single-flight delay after a timeout is a documented
+/// Beta limit (process pools kill the worker instead).
+#[cfg(phpx_embed_linked)]
+fn run_on_engine_timeout(op: EngineOp, timeout: Option<std::time::Duration>) -> EngineOut {
+    let timeout_err = || {
+        EngineOut::Eval(LiveOutput {
+            status: 2,
+            output: b"embedded execution timeout".to_vec(),
+            ret_long: None,
+        })
+    };
+    let gone_err = || {
+        EngineOut::Eval(LiveOutput {
+            status: 2,
+            output: b"engine thread gone".to_vec(),
+            ret_long: None,
+        })
+    };
     let (tx, rx) = std::sync::mpsc::channel();
-    match engine_thread().send((op, tx)) {
-        Ok(()) => rx.recv().unwrap_or(EngineOut::Eval(LiveOutput {
+    if engine_thread().send((op, tx)).is_err() {
+        return gone_err();
+    }
+    match timeout {
+        None => rx.recv().unwrap_or(EngineOut::Eval(LiveOutput {
             status: 2,
             output: b"engine thread hung up".to_vec(),
             ret_long: None,
         })),
-        Err(_) => EngineOut::Eval(LiveOutput {
-            status: 2,
-            output: b"engine thread gone".to_vec(),
-            ret_long: None,
-        }),
+        Some(d) => match rx.recv_timeout(d) {
+            Ok(out) => out,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => timeout_err(),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => EngineOut::Eval(LiveOutput {
+                status: 2,
+                output: b"engine thread hung up".to_vec(),
+                ret_long: None,
+            }),
+        },
     }
 }
 
@@ -448,6 +481,49 @@ pub fn serve(
     }
 }
 
+/// Bounded serve: same as `serve` but the gateway waits at most `timeout`
+/// for the engine reply. On timeout returns `Err("embedded execution
+/// timeout")` so the caller can report 504 within the explicit budget.
+/// The late engine reply is dropped (receiver gone); the long request still
+/// occupies the single engine thread to completion — documented Beta limit.
+#[cfg(phpx_embed_linked)]
+pub fn serve_with_timeout(
+    entry_abs_path: &str,
+    method: &str,
+    path: &str,
+    query: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+    timeout: std::time::Duration,
+) -> Result<LiveOutput> {
+    match run_on_engine_timeout(
+        EngineOp::Serve {
+            entry: entry_abs_path.to_string(),
+            method: method.to_string(),
+            path: path.to_string(),
+            query: query.to_string(),
+            headers: headers.to_vec(),
+            body: body.to_vec(),
+        },
+        Some(timeout),
+    ) {
+        EngineOut::Eval(out)
+            if out.status == 2
+                && out.ret_long.is_none()
+                && out.output == b"embedded execution timeout" =>
+        {
+            Err(PhpxError::Runtime("embedded execution timeout".to_string()))
+        }
+        EngineOut::Eval(out) if out.status == 2 && out.ret_long.is_none() => Err(
+            PhpxError::Runtime(String::from_utf8_lossy(&out.output).to_string()),
+        ),
+        EngineOut::Eval(out) => Ok(out),
+        EngineOut::NextRequest(_) => {
+            Err(PhpxError::Runtime("live engine protocol error".to_string()))
+        }
+    }
+}
+
 /// Stub builds: same API, fail-closed without touching FFI.
 #[cfg(not(phpx_embed_linked))]
 pub fn execute_once(_code: &str) -> Result<LiveOutput> {
@@ -484,6 +560,23 @@ pub fn serve(
     _query: &str,
     _headers: &[(String, String)],
     _body: &[u8],
+) -> Result<LiveOutput> {
+    Err(PhpxError::Runtime(format!(
+        "live engine unavailable in this build (build_linked={}, M6 experimental stub). Build on Linux NTS with PHPX_EMBED_LINK=1.",
+        crate::is_build_linked()
+    )))
+}
+
+/// Stub builds: same API, fail-closed without touching FFI.
+#[cfg(not(phpx_embed_linked))]
+pub fn serve_with_timeout(
+    _entry_abs_path: &str,
+    _method: &str,
+    _path: &str,
+    _query: &str,
+    _headers: &[(String, String)],
+    _body: &[u8],
+    _timeout: std::time::Duration,
 ) -> Result<LiveOutput> {
     Err(PhpxError::Runtime(format!(
         "live engine unavailable in this build (build_linked={}, M6 experimental stub). Build on Linux NTS with PHPX_EMBED_LINK=1.",

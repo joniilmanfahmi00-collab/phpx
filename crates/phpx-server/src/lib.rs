@@ -6,7 +6,9 @@ use hyper_util::server::conn::auto::Builder as ConnBuilder;
 use phpx_config::PhpxConfig;
 use phpx_core::{PhpxError, Result};
 use phpx_runtime::{PhpRequest, PhpResponse};
-use phpx_worker::{BoundedPool, PersistentPool, PersistentPoolConfig, PoolConfig};
+use phpx_worker::{
+    BoundedPool, EmbeddedPool, EmbeddedPoolConfig, PersistentPool, PersistentPoolConfig, PoolConfig,
+};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Component, PathBuf};
@@ -35,6 +37,9 @@ pub enum ExecPool {
     // far larger than the one-shot throttle (which stays inline: it is the
     // default hot path and boxing it would add a pointless indirection).
     Persistent(Box<PersistentPool>),
+    // Embedded single-flight pool (P2): one dedicated engine thread, bounded
+    // queue + explicit timeouts. Small (config + counters) so kept inline.
+    Embedded(EmbeddedPool),
 }
 
 impl ExecPool {
@@ -42,6 +47,7 @@ impl ExecPool {
         match self {
             ExecPool::OneShot(_) => phpx_runtime::EXECUTION_MODE_ONE_SHOT,
             ExecPool::Persistent(p) => p.execution_mode(),
+            ExecPool::Embedded(p) => p.execution_mode(),
         }
     }
 
@@ -49,6 +55,7 @@ impl ExecPool {
         match self {
             ExecPool::OneShot(p) => p.execute(req),
             ExecPool::Persistent(p) => p.execute(req),
+            ExecPool::Embedded(p) => p.execute(req),
         }
     }
 
@@ -56,6 +63,7 @@ impl ExecPool {
         match self {
             ExecPool::OneShot(p) => p.prometheus_text(),
             ExecPool::Persistent(p) => p.prometheus_text(),
+            ExecPool::Embedded(p) => p.prometheus_text(),
         }
     }
 
@@ -63,6 +71,7 @@ impl ExecPool {
         match self {
             ExecPool::OneShot(p) => p.begin_drain(),
             ExecPool::Persistent(p) => p.begin_drain(),
+            ExecPool::Embedded(p) => p.begin_drain(),
         }
     }
 
@@ -74,6 +83,7 @@ impl ExecPool {
                 (s.active, s.waiting)
             }
             ExecPool::Persistent(p) => p.load(),
+            ExecPool::Embedded(p) => p.load(),
         };
         PoolLoad { active, waiting }
     }
@@ -82,6 +92,7 @@ impl ExecPool {
         match self {
             ExecPool::OneShot(p) => p.drain(timeout),
             ExecPool::Persistent(p) => p.drain(timeout),
+            ExecPool::Embedded(p) => p.drain(timeout),
         }
     }
 }
@@ -292,9 +303,40 @@ pub fn build_state(cfg: &PhpxConfig) -> Result<Arc<AppState>> {
             cfg.application.entrypoint
         )));
     }
+    let php_bin = std::env::var("PHPX_PHP_BIN").unwrap_or_else(|_| "php".to_string());
+    // P2 embedded serve path: runtime.mode selects the pool. Embedded is a
+    // single-flight pool over the in-process engine (explicit timeouts from
+    // [runtime.embedded]); process modes keep the existing worker pools.
+    // Routing (direct .php / static / front-controller) is unchanged —
+    // dispatch_php maps PhpRequest.app_root+entrypoint to the entry file
+    // for either pool; only the executor differs.
+    if cfg.runtime.mode.as_str() == "embedded" {
+        let emb = cfg.runtime.embedded.clone().unwrap_or_default();
+        if !emb.enabled {
+            return Err(PhpxError::Config(
+                "runtime.mode=embedded requires [runtime.embedded] enabled=true (experimental)"
+                    .to_string(),
+            ));
+        }
+        let pool = ExecPool::Embedded(EmbeddedPool::new(EmbeddedPoolConfig {
+            execution_timeout: Duration::from_secs(emb.request_timeout_seconds.max(1)),
+            queue_bound: emb.effective_queue_bound(),
+            queue_wait_timeout: Duration::from_secs(emb.queue_wait_timeout_seconds),
+            drain_timeout: Duration::from_secs(emb.shutdown_drain_timeout_seconds.max(1)),
+        })?);
+        let drain_timeout = Duration::from_secs(emb.shutdown_drain_timeout_seconds.max(1));
+        return Ok(Arc::new(AppState {
+            docroot,
+            docroot_canonical,
+            entrypoint: cfg.application.entrypoint.clone(),
+            pool,
+            body_limit: cfg.body_limit_bytes(),
+            php_bin,
+            drain_timeout,
+        }));
+    }
     let proc = cfg.runtime.process.clone().unwrap_or_default();
     let timeout_s = proc.request_timeout_seconds.max(1);
-    let php_bin = std::env::var("PHPX_PHP_BIN").unwrap_or_else(|_| "php".to_string());
     let mode = phpx_runtime::ExecutionMode::parse(&proc.execution_mode).ok_or_else(|| {
         PhpxError::Config(format!(
             "runtime.process.execution_mode must be one-shot or persistent, got {}",

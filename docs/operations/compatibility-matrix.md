@@ -66,7 +66,7 @@ Full matrix runbook: `php -m` on target host vs app requirements; record gaps he
 | `phpx-server --lib` (redaction + traversal matrix + traceparent) | PASS (5/5) |
 | `m7_security` (raw-socket 400, secret soak, symlink 403/404, Dockerfile non-root) | PASS (4/4) |
 | `m7_resilience` (saturation bounded + metrics observable + recovery, config gates) | PASS (2/2) |
-| `m4_compat` (vanilla/composer/laravel/wp/woo + /metrics) | PASS (process green; embedded deferred) |
+| `m4_compat` (vanilla/composer/laravel/wp/woo + /metrics) | PASS (process green; embedded parity + gateway via `p2_embedded_gateway`, vanilla live on linked) |
 | `m3_cli` (`doctor/metrics/queue/scheduler/cache/storage`) | PASS (6/6) |
 | `p0d_laravel` (real Laravel 12: welcome, 404, JSON 405, sessions, multipart) | PASS (5/5) |
 | `p0d_wordpress` (real WordPress 7.1 + WooCommerce 11.3: front, search, pretty, login, REST, comments, media auth, shop, product, cart/checkout docs, wc/v3; needs provisioned install + MySQL) | PASS (13/13), SKIP loudly when unprovisioned |

@@ -30,20 +30,39 @@ doctor` keeps its informational php-embed checks.
 
 - available=false until every promotion gate passes (derived from
   `gates::available()`, fail-closed — not a literal).
-- single_threaded=true, max_concurrent_entries=1.
+- single_threaded=true, max_concurrent_entries=1. The gateway serializes
+  through one engine slot: extra requests wait in a bounded queue
+  (explicit `queue_bound` + `queue_wait_timeout_seconds`, 503 backpressure
+  on full/wait-timeout — same contract as the process pools).
 - nts_only=true (ZTS not claimed).
-- Concurrent entry is rejected with an actionable error, never queued.
+- Execution timeout is explicit (`request_timeout_seconds`, 504 on expiry).
+  Asymmetry vs process pools (documented Beta limit): the gateway reports
+  504 within the bound but cannot kill NTS mid-request — the long request
+  runs to completion and later requests queue behind it.
 
 ## Config
 
 [runtime.embedded] enabled=false is the default. Set enabled=true plus runtime.mode=embedded to opt in (experimental).
-Validation still rejects mode=embedded without enabled=true.
+Validation still rejects mode=embedded without enabled=true. All bounds are
+explicit (serde defaults keep old configs parsing):
+
+- `request_timeout_seconds` (default 30, 1-600): gateway-side execution
+  budget, 504 on expiry (see timeout asymmetry above).
+- `queue_bound` (default auto = 16, 1-100000): bounded wait queue, 503 on full.
+- `queue_wait_timeout_seconds` (default 2, 0-120): bounded wait for the
+  single engine slot, 503 on expiry.
+- `shutdown_drain_timeout_seconds` (default 10, 1-120): graceful drain budget.
 
 ## CLI
 
 - runtime list shows embedded status experimental-disabled or experimental-enabled plus derived available/linked.
 - runtime inspect includes an embedded object with enabled, available, single_threaded, max_concurrent_entries, abi pin, and the full `gates` array (per-gate pass + evidence).
-- Execution through embedded is not wired yet; requests keep using the process backend.
+- `runtime.mode=embedded` is wired: the gateway builds the single-flight
+  `EmbeddedPool` (pooling + routing + explicit timeouts above) and serves
+  the same routes (direct .php / static / front-controller) through
+  `live::serve_with_timeout`. Stub builds fail closed per request
+  (500, actionable "live engine unavailable" — never hang); linked builds
+  execute live (see `crates/phpx-server/tests/p2_embedded_gateway.rs`).
 
 ## Engine lifecycle (P2 gate model, DONE)
 
@@ -160,7 +179,7 @@ linked. Proves the gates hold in linked mode, not only in stub mode:
 - Soak record (`data/bench/soak-embed-latest/SUMMARY.json`, gitignored): 300 mixed evals + 30 request cycles, 307 clean, 6 bailouts contained, 0 failures, RSS +278 KB steady-state (cap 10 MB, post-warmup) in ~1.3 s — the stability gate reads this archive back (test asserts the flip end to end).
 - Live `gates::assess()` on the linked build: **9 PASS, `available=true`**. The gates are honest: stub builds report HOLD + `available=false`; a linked build without a soak archive reports 8/9 + `available=false`.
   - PASS: `abi_pin`, `native_link`, `execution_domain`, `ownership`, `containment`, `extensions` (live `php -m` 11/11 on the NTS build), `isolation` (request-cycle reset proven live), `stability` (soak archive valid), `compat_parity` (all four sims live: vanilla hello-world, laravel routing+JSON incl. contained `exit`, wordpress loop/search/shortcode, woocommerce cart/checkout incl. contained `exit`).
-- What `available=true` means: the runtime is proven capable (isolated requests, contained failures, stable under soak, app parity on the sim suite). It does NOT start serving traffic: the gateway still defaults to `process`, and `runtime.mode=embedded` is still rejected until the serve path is wired (next milestone). No code changes were needed for the flip itself — `available()` derives from the assessor.
+- What `available=true` means: the runtime is proven capable (isolated requests, contained failures, stable under soak, app parity on the sim suite). The gateway defaults to `process`; select `runtime.mode=embedded` (+ `enabled=true`) to serve through the single-flight embedded pool — pooling, routing and explicit timeouts are wired (P2 serve path DONE, `p2_embedded_gateway.rs` green on stub and linked). No code changes were needed for the flip itself — `available()` derives from the assessor.
 
 ## Live execution (P2 milestone, WSL-proven)
 

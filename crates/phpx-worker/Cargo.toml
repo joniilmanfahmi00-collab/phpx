@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 phpx-core.workspace = true
 phpx-runtime.workspace = true
+phpx-runtime-embedded.workspace = true
 phpx-runtime-process.workspace = true
 serde.workspace = true
 serde_json.workspace = true

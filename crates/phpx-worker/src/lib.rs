@@ -4,8 +4,10 @@ use phpx_runtime_process::{ExecuteOptions, PhpDiscovery};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+pub mod embedded;
 pub mod memory;
 pub mod persistent;
+pub use embedded::{EmbeddedPool, EmbeddedPoolConfig, EmbeddedStats};
 pub use memory::{classify, sample_rss, MemoryClass, MemorySample};
 pub use persistent::{
     PersistentPool, PersistentPoolConfig, WorkerEvent, WorkerSnapshot, WorkerState,

@@ -136,6 +136,42 @@ pub struct RuntimeProcessConfig {
 pub struct RuntimeEmbeddedConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Explicit per-request execution timeout, 1-600s. Gateway-side bound:
+    /// the gateway returns 504 after this even though the single engine
+    /// thread cannot be killed mid-request (unlike process workers); the
+    /// long request runs to completion and later requests queue behind it.
+    /// This asymmetry is a documented Beta limit of embedded single-flight.
+    #[serde(default = "default_timeout")]
+    pub request_timeout_seconds: u64,
+    /// Bounded queue before the single engine slot. None = auto (16).
+    /// Rejections are 503 backpressure, same contract as process pools.
+    #[serde(default)]
+    pub queue_bound: Option<usize>,
+    /// How long a request waits for the engine slot, 0-120s (0 = no wait).
+    #[serde(default = "default_queue_wait")]
+    pub queue_wait_timeout_seconds: u64,
+    /// Graceful drain budget on shutdown, 1-120s.
+    #[serde(default = "default_drain_timeout")]
+    pub shutdown_drain_timeout_seconds: u64,
+}
+
+impl Default for RuntimeEmbeddedConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            request_timeout_seconds: default_timeout(),
+            queue_bound: None,
+            queue_wait_timeout_seconds: default_queue_wait(),
+            shutdown_drain_timeout_seconds: default_drain_timeout(),
+        }
+    }
+}
+
+impl RuntimeEmbeddedConfig {
+    /// Effective queue bound: explicit or auto (16 for the single slot).
+    pub fn effective_queue_bound(&self) -> usize {
+        self.queue_bound.unwrap_or(16)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
@@ -486,17 +522,37 @@ impl PhpxConfig {
             )));
         }
         if mode == "embedded" {
-            let enabled = self
-                .runtime
-                .embedded
-                .as_ref()
-                .map(|e| e.enabled)
-                .unwrap_or(false);
+            let emb = self.runtime.embedded.as_ref();
+            let enabled = emb.map(|e| e.enabled).unwrap_or(false);
             if !enabled {
                 return Err(PhpxError::Config(
                     "runtime.mode=embedded requires [runtime.embedded] enabled=true (experimental)"
                         .to_string(),
                 ));
+            }
+            if let Some(e) = emb {
+                if e.request_timeout_seconds == 0 || e.request_timeout_seconds > 600 {
+                    return Err(PhpxError::Config(
+                        "runtime.embedded.request_timeout_seconds must be 1-600".to_string(),
+                    ));
+                }
+                let qb = e.effective_queue_bound();
+                if qb == 0 || qb > 100_000 {
+                    return Err(PhpxError::Config(
+                        "runtime.embedded.queue_bound must be 1-100000 (bounded, backpressure mandatory)"
+                            .to_string(),
+                    ));
+                }
+                if e.queue_wait_timeout_seconds > 120 {
+                    return Err(PhpxError::Config(
+                        "runtime.embedded.queue_wait_timeout_seconds must be 0-120".to_string(),
+                    ));
+                }
+                if e.shutdown_drain_timeout_seconds == 0 || e.shutdown_drain_timeout_seconds > 120 {
+                    return Err(PhpxError::Config(
+                        "runtime.embedded.shutdown_drain_timeout_seconds must be 1-120".to_string(),
+                    ));
+                }
             }
         }
         if let Some(p) = &self.runtime.process {

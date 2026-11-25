@@ -12,8 +12,11 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 /// - `one-shot`: one fresh `php` process per request (M1, implemented).
 /// - `persistent`: long-lived supervised PHP workers (P0-B, implemented as
 ///   `PersistentPool`: fixed-size pool, handshake-gated, per-worker identity).
+/// - `embedded`: in-process libphp on one dedicated OS thread (P2, gated by
+///   `phpx-runtime-embedded::gates::available`; single-flight, never default).
 pub const EXECUTION_MODE_ONE_SHOT: &str = "one-shot";
 pub const EXECUTION_MODE_PERSISTENT: &str = "persistent";
+pub const EXECUTION_MODE_EMBEDDED: &str = "embedded";
 
 /// Selected execution mode. Both variants are runnable; the gateway selects
 /// the pool (`BoundedPool` vs `PersistentPool`) from configuration.

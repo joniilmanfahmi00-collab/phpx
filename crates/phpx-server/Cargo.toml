@@ -8,6 +8,7 @@ license.workspace = true
 phpx-core.workspace = true
 phpx-config.workspace = true
 phpx-runtime.workspace = true
+phpx-runtime-embedded.workspace = true
 phpx-runtime-process.workspace = true
 phpx-worker.workspace = true
 tokio.workspace = true
