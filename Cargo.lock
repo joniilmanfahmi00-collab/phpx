@@ -1069,6 +1069,7 @@ dependencies = [
 name = "phpx-runtime-embedded"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "phpx-core",
  "phpx-runtime",
  "serde",

@@ -123,6 +123,25 @@ fn main() {
     for l in &libs {
         println!("cargo:rustc-link-lib={l}");
     }
+    // P2 promotion: compile the bailout-safe engine shim against the same
+    // php headers (only linked builds reach here; stubs never compile C).
+    let mut inc_dirs: Vec<String> = Vec::new();
+    if let Ok(out) = Command::new(&php_config).arg("--includes").output() {
+        let s = String::from_utf8_lossy(&out.stdout).to_string();
+        for tok in s.split_whitespace() {
+            if let Some(dir) = tok.strip_prefix("-I") {
+                if !dir.is_empty() && !inc_dirs.contains(&dir.to_string()) {
+                    inc_dirs.push(dir.to_string());
+                }
+            }
+        }
+    }
+    let mut shim = cc::Build::new();
+    shim.file("src/engine_shim.c").warnings(false);
+    for d in &inc_dirs {
+        shim.include(d);
+    }
+    shim.compile("phpx_embed_shim");
     println!("cargo:rustc-cfg=phpx_embed_linked");
     warn(&format!("linked php-embed (php-config {version}, libs={libs:?}); runtime stays experimental, available=false until M6 gates pass"));
 }

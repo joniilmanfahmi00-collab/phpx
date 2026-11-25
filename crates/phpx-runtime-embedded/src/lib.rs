@@ -17,6 +17,7 @@ pub mod ext;
 pub mod gates;
 pub mod isolation;
 pub mod link;
+pub mod live;
 pub mod ownership;
 
 /// True when build.rs actually linked libphp (Linux + PHPX_EMBED_LINK=1).

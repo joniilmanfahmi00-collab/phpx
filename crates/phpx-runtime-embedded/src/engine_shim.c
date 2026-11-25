@@ -57,6 +57,14 @@ static size_t phpx_ub_write(const char *str, size_t len) {
 }
 
 /* 0 ok, 2 init failed. Idempotent: second call is a no-op success. */
+/* NOTE: sapi_startup() COPIES php_embed_module into the global `sapi_module`;
+ * ub_write calls go through the global copy, so the override must target
+ * `sapi_module.ub_write` (overriding php_embed_module after startup is a
+ * silent no-op — output would leak to real stdout, as the first live run
+ * proved). Declared in main/SAPI.h as extern SAPI_API.
+ */
+extern sapi_module_struct sapi_module;
+
 int phpx_embed_startup(void) {
     static int started = 0;
     static char *fake_argv[] = {(char *)"phpx-embed", NULL};
@@ -66,7 +74,7 @@ int phpx_embed_startup(void) {
     if (php_embed_init(1, fake_argv) != SUCCESS) {
         return 2;
     }
-    php_embed_module.ub_write = phpx_ub_write;
+    sapi_module.ub_write = phpx_ub_write;
     started = 1;
     return 0;
 }

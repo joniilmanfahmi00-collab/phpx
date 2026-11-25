@@ -155,11 +155,49 @@ linked. Proves the gates hold in linked mode, not only in stub mode:
 ## Linked gate run (WSL Debian, 2026-11-24, P2 gates)
 
 - Toolchain: php-config 8.3.36 NTS + `/usr/include/php/20230831/sapi/embed/php_embed.h` + `libphp.so`; build log: `linked php-embed (php-config 8.3.36, libs=["php8.3", ...])`.
-- `PHPX_EMBED_LINK=1 cargo test -p phpx-runtime-embedded` = **42 lib + 16 contract, all green WITH libphp linked** (was 28 + 12 on 2026-11-19; +14 from the P2 gate modules).
+- `PHPX_EMBED_LINK=1 cargo test -p phpx-runtime-embedded` = **42 lib + 16 contract + 5 linked-engine, all green WITH libphp linked** (was 28 + 12 on 2026-11-19; +14 from the P2 gate modules, +5 live execution proofs).
+- First live executions through the narrow bridge: boot, `6*7 = 42`, echo output capture, shared-executor leak pinned, bailout contained + engine reusable — all green, default parallel test threads.
 - Live `gates::assess()` on the linked build: **6 PASS + 3 HOLD, `available=false`** (fail-closed, correct):
   - PASS: `abi_pin`, `native_link`, `execution_domain`, `ownership`, `containment`, `extensions` (live `php -m` 11/11 on the NTS build).
   - HOLD: `isolation` (needs live Zend reset proof), `compat_parity` (no subset executes yet), `stability` (no archived linked soak).
 - Promotion flips mechanically when the three HOLDs turn PASS with archived evidence; no code path changes needed (`available()` derives from the assessor).
+
+## Live execution (P2 milestone, WSL-proven)
+
+`tests/linked_engine.rs` (linked builds only) drives the real engine through
+the narrow bridge — the first live PHPX embedded executions:
+
+- boot: engine inits once per process (`phpx_embed_startup` idempotent).
+- expression eval: `eval_expr("6*7")` returns long `42`.
+- output capture: `execute_once("echo 'hello-live';")` returns the bytes
+  (ub_write override targets the global `sapi_module` copy — overriding
+  `php_embed_module` post-startup is a silent no-op because `sapi_startup()`
+  copies the struct).
+- shared-executor reality: sequential evals share one executor, so
+  `$GLOBALS` set in eval N is visible in eval N+1 (pinned `leak`). This is
+  the documented isolation gap: flipping it needs the per-request reset
+  (future `phpx_embed_request` cycle or equivalent), not just eval.
+- FFI contract learned from `zend_execute_API.c`: with retval requested the
+  engine wraps the snippet as `return <code>;` itself — statements go
+  retval-NULL, bare expressions go with retval. Mixing them is a clean
+  parse error, never memory unsafety.
+- bailout containment: `live_bailout_contained_host_survives` pins that an
+  uncaught exception longjmps back to status 1 with the host alive and the
+  engine reusable on the next eval (`Fatal error: Uncaught Exception` printed,
+  process survives, `7*6` returns `42` right after).
+- threading rule (proven the hard way): the NTS engine is pinned to ONE
+  dedicated OS thread for the whole process (`tests/linked_engine.rs`
+  routes every eval through a single engine thread). Parallel cargo tests
+  that touched the engine from different threads tripped Zend stack
+  tracking after a bailout (spurious "Maximum call stack size" on other
+  threads' stacks) — serial passes, parallel failed, dispatcher fixed it.
+  This mirrors the production constraint (single-entry domain) and the
+  future server integration shape: one engine thread, never the gateway
+  workers' threads.
+
+The isolation + compat_parity + stability gates stay HOLD until per-request
+reset, subset parity, and an archived soak land — `available()` remains
+fail-closed.
 
 ## WSL gate verification (M6 gates, 2026-11-19, WSL Debian)
 

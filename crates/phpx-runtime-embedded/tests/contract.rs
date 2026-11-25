@@ -37,6 +37,15 @@ fn stub_never_executes_php() {
     assert!(err.contains("php-embed not linked"));
 }
 
+#[cfg(not(phpx_embed_linked))]
+#[test]
+fn live_path_fail_closed_without_link() {
+    let e = emb::live::execute_once("return 1;")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("unavailable"), "{e}");
+}
+
 #[test]
 fn abi_pin_contract() {
     let pin = emb::abi::AbiPin::pinned();
