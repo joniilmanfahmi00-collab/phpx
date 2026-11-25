@@ -98,13 +98,87 @@ pub fn assess() -> Vec<GateStatus> {
         pass: false,
         evidence: "HOLD: 1/4 subsets live — the vanilla fixture executes through the engine via include with pinned output (hello from phpx vanilla|rid=direct). laravel-minimal/wordpress-minimal/woocommerce-minimal need SAPI request plumbing ($_GET/$_POST/headers/cookies per request)".to_string(),
     });
-    gates.push(GateStatus {
-        id: "stability",
-        name: "Stability evidence (no promotion on throughput alone)".to_string(),
-        pass: false,
-        evidence: "HOLD: no archived linked-engine soak (consecutive clean entries + RSS trend per the soak-long convention)".to_string(),
-    });
+    gates.push(stability_gate());
     gates
+}
+
+/// Conventional soak archive the stability gate reads (gitignored, like the
+/// process soak-long). `PHPX_EMBED_SOAK_RECORD` overrides the path.
+fn soak_record_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("PHPX_EMBED_SOAK_RECORD") {
+        if !p.trim().is_empty() {
+            return std::path::PathBuf::from(p);
+        }
+    }
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/bench/soak-embed-latest/SUMMARY.json")
+}
+
+/// Stability: PASS iff this is a linked build AND a soak archive exists,
+/// is fresh (<180 days), and records zero failures with a bounded RSS
+/// trend. The archive is produced by `tests/linked_soak.rs`; absent,
+/// invalid or stale records HOLD (never an error). Stub builds always
+/// HOLD: there is no linked engine whose stability could be evidenced.
+fn stability_gate() -> GateStatus {
+    let path = soak_record_path();
+    // A stub build has no linked engine, so no soak record can evidence
+    // stability — HOLD without even reading the archive.
+    if !crate::is_build_linked() {
+        return GateStatus {
+            id: "stability",
+            name: "Stability evidence (no promotion on throughput alone)".to_string(),
+            pass: false,
+            evidence: "HOLD: stub build (no linked engine to soak; run tests/linked_soak.rs on a linked build)".to_string(),
+        };
+    }
+    let read = (|| -> Option<String> {
+        let text = std::fs::read_to_string(&path).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+        if v.get("schema")?.as_str()? != "phpx-embed-soak/1" {
+            return None;
+        }
+        let failures = v.get("failures")?.as_u64()?;
+        let iters = v.get("iters")?.as_u64()?;
+        let clean = v.get("clean")?.as_u64()?;
+        let growth = v.get("rss_growth_bytes")?.as_u64()?;
+        let cap = v.get("rss_cap_bytes")?.as_u64()?;
+        let date = v.get("date")?.as_u64()?;
+        if failures != 0 || iters < 200 || clean == 0 || growth > cap {
+            return None;
+        }
+        let age_days = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().saturating_sub(date) / 86400)
+            .unwrap_or(u64::MAX);
+        if age_days > 180 {
+            return None;
+        }
+        Some(format!(
+            "DONE: linked soak record {} ({} iters, {} clean, 0 failures, RSS +{}B, {}d old)",
+            path.display(),
+            iters,
+            clean,
+            growth,
+            age_days
+        ))
+    })();
+    match read {
+        Some(evidence) => GateStatus {
+            id: "stability",
+            name: "Stability evidence (no promotion on throughput alone)".to_string(),
+            pass: true,
+            evidence,
+        },
+        None => GateStatus {
+            id: "stability",
+            name: "Stability evidence (no promotion on throughput alone)".to_string(),
+            pass: false,
+            evidence: format!(
+                "HOLD: no valid linked-engine soak at {} (run tests/linked_soak.rs on a linked build to archive one; needs 200+ iters, 0 failures, bounded RSS, <180d old)",
+                path.display()
+            ),
+        },
+    }
 }
 
 /// Promotion condition: every gate passes. Fail-closed by construction.
@@ -149,14 +223,32 @@ mod tests {
             !available(),
             "available must stay false until every gate passes"
         );
-        // compat_parity and stability hold in every build: parity needs all
-        // four subsets, stability needs an archived soak. isolation follows
-        // the build: HOLD in stub (no engine to cycle), DONE when linked
-        // (request-cycle isolation proven live).
+        // compat_parity holds in every build (parity needs all four subsets).
+        // stability holds in stub builds (no linked engine to soak); in
+        // linked builds it follows the soak archive (the linked soak test
+        // asserts the flip end to end, so unit tests only pin the wording).
+        #[cfg(not(phpx_embed_linked))]
         for id in ["compat_parity", "stability"] {
             let g = assess().into_iter().find(|g| g.id == id).unwrap();
             assert!(!g.pass, "{id} must hold");
             assert!(g.evidence.contains("HOLD"), "{id} must say HOLD");
+        }
+        #[cfg(phpx_embed_linked)]
+        {
+            let g = assess()
+                .into_iter()
+                .find(|g| g.id == "compat_parity")
+                .unwrap();
+            assert!(
+                !g.pass,
+                "compat_parity must hold until all four subsets run live"
+            );
+            assert!(g.evidence.contains("HOLD"));
+            let s = assess().into_iter().find(|g| g.id == "stability").unwrap();
+            assert!(
+                s.evidence.contains("HOLD") || s.evidence.contains("DONE"),
+                "stability must report a verdict"
+            );
         }
         let iso = assess().into_iter().find(|g| g.id == "isolation").unwrap();
         assert_eq!(

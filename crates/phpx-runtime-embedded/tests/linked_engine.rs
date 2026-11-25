@@ -12,9 +12,24 @@
 #![cfg(phpx_embed_linked)]
 
 use phpx_runtime_embedded as emb;
+use std::sync::{Mutex, OnceLock};
+
+// Test-level serialization: the engine thread already serializes evals, but
+// tests that assert executor state (leak vs clean) need ATOMICITY across
+// their own eval sequences — another test's next_request() must not slip
+// between this test's set and probe. One lock for the whole test body.
+static SERIAL: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn lock_tests() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
 
 #[test]
 fn live_engine_boots() {
+    let _t = lock_tests();
     let out = emb::live::execute_once("return 1;").expect("boot eval");
     // Statements go through with retval NULL: status proves execution.
     // Return-value capture is eval_expr's job (tested below).
@@ -23,6 +38,7 @@ fn live_engine_boots() {
 
 #[test]
 fn live_eval_returns_long() {
+    let _t = lock_tests();
     let out = emb::live::eval_expr("6*7").expect("eval");
     assert_eq!(out.status, 0);
     assert_eq!(out.ret_long, Some(42));
@@ -30,6 +46,7 @@ fn live_eval_returns_long() {
 
 #[test]
 fn live_eval_captures_echo() {
+    let _t = lock_tests();
     let out = emb::live::execute_once("echo 'hello-live';").expect("eval");
     assert_eq!(out.status, 0);
     assert_eq!(out.output, b"hello-live");
@@ -37,6 +54,7 @@ fn live_eval_captures_echo() {
 
 #[test]
 fn live_sequential_evals_share_executor_without_cycle() {
+    let _t = lock_tests();
     // Shared-executor reality without a request cycle: state set in eval N
     // is visible in eval N+1 by design. Pins the mechanism the cycle fixes.
     let set = emb::live::execute_once("$GLOBALS['phpx_leak_probe'] = 123;").expect("set eval");
@@ -55,6 +73,7 @@ fn live_sequential_evals_share_executor_without_cycle() {
 
 #[test]
 fn live_request_cycle_isolates_state() {
+    let _t = lock_tests();
     // P2 isolation proof: set state, cycle the request, prove it is gone.
     // A fresh executor per request is the isolation primitive the gate needs.
     let set = emb::live::execute_once("$GLOBALS['phpx_iso_probe'] = 7;").expect("set eval");
@@ -76,6 +95,7 @@ fn live_request_cycle_isolates_state() {
 
 #[test]
 fn live_vanilla_fixture_parity() {
+    let _t = lock_tests();
     // P2 compat evidence (1/4 subsets): the real M4 vanilla fixture executes
     // through the engine via include and renders the documented body.
     // `header()` is a no-op under embed (headers_sent=1 at init); getenv falls
@@ -105,6 +125,7 @@ fn live_vanilla_fixture_parity() {
 
 #[test]
 fn live_bailout_contained_host_survives() {
+    let _t = lock_tests();
     // Containment proof: an uncaught exception longjmps out of the executor.
     // The shim catches it (status 1, host alive) instead of aborting the
     // process — then the engine must serve again on the next eval.
@@ -121,6 +142,7 @@ fn live_bailout_contained_host_survives() {
 
 #[test]
 fn live_bailout_then_cycle_recovers_cleanly() {
+    let _t = lock_tests();
     // Belt and suspenders: a request cycle after a contained fatal leaves a
     // provably clean executor behind.
     let bad = emb::live::execute_once("throw new Exception('b2');").expect("eval runs");

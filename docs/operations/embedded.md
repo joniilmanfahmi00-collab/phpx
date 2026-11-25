@@ -155,12 +155,13 @@ linked. Proves the gates hold in linked mode, not only in stub mode:
 ## Linked gate run (WSL Debian, 2026-11-24, P2 gates)
 
 - Toolchain: php-config 8.3.36 NTS + `/usr/include/php/20230831/sapi/embed/php_embed.h` + `libphp.so`; build log: `linked php-embed (php-config 8.3.36, libs=["php8.3", ...])`.
-- `PHPX_EMBED_LINK=1 cargo test -p phpx-runtime-embedded` = **42 lib + 16 contract + 8 linked, all green WITH libphp linked** (was 28 + 12 on 2026-11-19).
+- `PHPX_EMBED_LINK=1 cargo test -p phpx-runtime-embedded` = **42 lib + 16 contract + 8 linked-engine + 1 linked soak, all green WITH libphp linked** (was 28 + 12 on 2026-11-19).
 - First live executions through the narrow bridge: boot, `6*7 = 42`, echo output capture, shared-executor leak pinned, request-cycle isolation (`set → cycle → clean`), vanilla fixture parity (`hello from phpx vanilla|rid=direct`), bailout containment + engine reuse, bailout → cycle recovery — all green, default parallel test threads (single dedicated engine thread; touching the engine from different OS threads trips Zend stack tracking after a bailout).
-- Live `gates::assess()` on the linked build: **7 PASS + 2 HOLD, `available=false`** (fail-closed, correct):
-  - PASS: `abi_pin`, `native_link`, `execution_domain`, `ownership`, `containment`, `extensions` (live `php -m` 11/11 on the NTS build), `isolation` (request-cycle reset proven live).
-  - HOLD: `compat_parity` (1/4 — vanilla live, rest need SAPI request plumbing), `stability` (no archived linked soak).
-- Promotion flips mechanically when the two HOLDs turn PASS with archived evidence; no code path changes needed (`available()` derives from the assessor).
+- Soak record (`data/bench/soak-embed-latest/SUMMARY.json`, gitignored): 300 mixed evals + 30 request cycles, 307 clean, 6 bailouts contained, 0 failures, RSS +278 KB steady-state (cap 10 MB, post-warmup) in ~1.3 s — the stability gate reads this archive back (test asserts the flip end to end).
+- Live `gates::assess()` on the linked build: **8 PASS + 1 HOLD, `available=false`** (fail-closed, correct):
+  - PASS: `abi_pin`, `native_link`, `execution_domain`, `ownership`, `containment`, `extensions` (live `php -m` 11/11 on the NTS build), `isolation` (request-cycle reset proven live), `stability` (soak archive valid: 300 iters, 0 failures, bounded RSS).
+  - HOLD: `compat_parity` (1/4 — vanilla live; laravel-minimal/wordpress-minimal/woocommerce-minimal need SAPI request plumbing: `$_GET`/`$_POST`/headers/cookies per request).
+- The last HOLD flips when the remaining three subsets execute with per-request SAPI state; `available()` derives from the assessor, so no code path changes are needed at promotion time.
 
 ## Live execution (P2 milestone, WSL-proven)
 
@@ -191,7 +192,16 @@ the narrow bridge — the first live PHPX embedded executions:
 - bailout containment: `live_bailout_contained_host_survives` pins that an
   uncaught exception longjmps back to status 1 with the host alive and the
   engine reusable on the next eval (`Fatal error: Uncaught Exception` printed,
-  process survives, `7*6` returns `42` right after).
+  process survives, `7*6` returns `42` right after), plus
+  `live_bailout_then_cycle_recovers_cleanly` (cycle after a fatal).
+- stability soak: `tests/linked_soak.rs` runs 300 mixed evals (expression +
+  echo + cycles every 10 + contained bailout with immediate reuse every 50 +
+  final vanilla parity include), asserting 0 unexpected failures and RSS
+  growth within cap, archiving `SUMMARY.json` + `rss.csv` under gitignored
+  `data/bench/soak-embed-<ts>/` plus the `soak-embed-latest` copy the
+  stability gate reads back (the test asserts the flip end to end).
+  `PHPX_EMBED_SOAK_DIR` overrides the archive dir; the gate also accepts
+  `PHPX_EMBED_SOAK_RECORD` for the file.
 - threading rule (proven the hard way): the NTS engine is pinned to ONE
   dedicated OS thread for the whole process (`tests/linked_engine.rs`
   routes every eval through a single engine thread). Parallel cargo tests
