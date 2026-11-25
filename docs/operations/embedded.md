@@ -92,10 +92,12 @@ Single source: phpx-runtime-embedded abi module (AbiPin).
 - build_plan: Linux x86_64 with php-dev NTS non-debug 8.3-8.5, php-config includes plus libs, build.rs link step, narrow bridge calls, contract tests gate every claim.
 - Native link deferred: Windows dev box has no php-embed dev libs, so probe reports actionable steps instead of linking.
 
-## Narrow bridge (M6 Point 3 DONE)
+## Narrow bridge (M6 Point 3 DONE) + live-eval shim (P2)
 
 - Module bridge, BRIDGE_VERSION=1. Allowlist only: startup, execute_once, shutdown. Unknown ops rejected before envelope checks.
 - C boundary headers: BridgeRequest plus BridgeResponse with repr C. Stub validates op plus envelope, then reports unlinked.
+- `src/engine_shim.c` (linked builds only): ub_write capture with a 16 MiB cap, `zend_first_try/catch` around every eval so a fatal longjmps back instead of killing the host, per-eval output handoff.
+- Eval semantics learned from zend_execute_API.c: **when retval is requested the engine wraps the snippet as `return <code>;` itself** — statements go through with retval NULL (`execute_once`: `echo 'x';`, assignments) while bare expressions go with retval (`eval_expr`: `6*7`, not `return 6*7;`). Mixing them up is a clean parse error, never a crash (pinned by the linked tests).
 
 ## Ownership and lifecycle (M6 Point 4 DONE)
 
