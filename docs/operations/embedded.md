@@ -13,14 +13,14 @@ Process Runtime stays the active backend. Embedded is opt-in and never default.
 | Gate | Status | Evidence |
 |---|---|---|
 | `abi_pin` — supported PHP build + ABI matrix | DONE | `abi::AbiPin` pin + matrix tests (8.3/8.4/8.5 NTS non-debug accept; ZTS/Debug/older reject) |
-| `native_link` — real PHP Embed SAPI link | HOLD (stub) / DONE when linked | `build.rs` links libphp only on Linux + `PHPX_EMBED_LINK=1`; WSL Debian gate 2026-11-19 green linked |
-| `execution_domain` — controlled domain + thread constraints | DONE | Single-entry `EmbeddedDomain`, 8-thread race = exactly 1 winner, panic poisons gracefully |
+| `native_link` — real PHP Embed SAPI link | DONE when linked (HOLD stub) | `build.rs` links libphp only on Linux + `PHPX_EMBED_LINK=1`; WSL Debian gates green linked (2026-11-19 and 2026-11-25) |
+| `execution_domain` — controlled domain + thread constraints | DONE | Single-entry `EmbeddedDomain`, 8-thread race = exactly 1 winner, panic poisons gracefully; live engine pinned to one dedicated thread |
 | `ownership` — ownership/lifetime rules across the C ABI | DONE | 5 rules + `RequestScope` tracker, enforced by construction |
-| `containment` — failure containment strategy | DONE | Validate-then-enter-then-cap order, exact 16 MiB cap, junk rejected before entry |
+| `containment` — failure containment strategy | DONE | Validate-then-enter-then-cap order, exact 16 MiB cap, junk rejected before entry; live bailouts contained + engine reusable |
 | `extensions` — extension compatibility tests | LIVE (machine-dependent) | `ext::ExtReport::probe()` audits live `php -m` vs the 11-extension doctor matrix; HOLD lists the missing extensions |
-| `isolation` — request state isolation tests | HOLD | `IsolationScope` lifecycle modeled + unit-proven (clean seal vs leak fail-closed); live Zend executor reset per request unproven without a hosted engine |
-| `compat_parity` — parity on the compatibility suite | HOLD | Subsets mirror M4 fixtures with per-subset blockers (table below); no subset executes through an engine yet |
-| `stability` — stability evidence, never throughput alone | HOLD | No archived linked-engine soak (consecutive clean entries + RSS trend per the soak-long convention) |
+| `isolation` — request state isolation tests | DONE when linked (HOLD stub) | `phpx_embed_next_request` RINIT cycle: `set → cycle → probe` reads clean, `bailout → cycle → clean`; single-`exit` double-RSHUTDOWN corrupts the heap (pinned rule) |
+| `compat_parity` — parity on the compatibility suite | DONE when linked (HOLD stub) | All four sims execute live via `live::serve`: vanilla hello-world, laravel routing+JSON+urlencoded, wordpress loop/search/shortcode+cookies, woocommerce cart/checkout+cookies (contained `exit` → documented status mapping) |
+| `stability` — stability evidence, never throughput alone | DONE when linked + soak archived (HOLD otherwise) | `tests/linked_soak.rs`: 300 mixed evals + request cycles, 6 contained bailouts, 0 failures, RSS +278 KB steady-state (cap 10 MB); archive read back by the gate |
 
 `available()` is true only when every gate passes — the mechanical promotion
 condition. `runtime inspect --json` exposes the full `gates` array; `phpx
