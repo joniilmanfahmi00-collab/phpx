@@ -612,12 +612,15 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
     };
     let cfg = loaded.cfg;
     let workers = cfg.runtime.process.as_ref().map(|p| p.workers).unwrap_or(4);
-    let execution_mode = cfg
-        .runtime
-        .process
-        .as_ref()
-        .map(|p| p.execution_mode.clone())
-        .unwrap_or_else(|| "one-shot".to_string());
+    let execution_mode = if cfg.runtime.mode == "embedded" {
+        phpx_runtime::EXECUTION_MODE_EMBEDDED.to_string()
+    } else {
+        cfg.runtime
+            .process
+            .as_ref()
+            .map(|p| p.execution_mode.clone())
+            .unwrap_or_else(|| "one-shot".to_string())
+    };
     let actual_php = php_first_line().unwrap_or_else(|| "php not found in PATH".to_string());
     match cmd {
         RuntimeCmd::List => {
@@ -663,22 +666,63 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
         }
         RuntimeCmd::Inspect => {
             let p = cfg.runtime.process.as_ref();
+            let emb = cfg.runtime.embedded.as_ref();
+            // P2 serve path: when mode=embedded the gateway runs the
+            // single-flight EmbeddedPool, so observability must report its
+            // explicit bounds — not the (unused) process pool numbers.
+            let is_emb = cfg.runtime.mode == "embedded";
+            let disp_execution_mode = if is_emb {
+                phpx_runtime::EXECUTION_MODE_EMBEDDED.to_string()
+            } else {
+                p.map(|x| x.execution_mode.clone())
+                    .unwrap_or_else(|| "one-shot".to_string())
+            };
+            let disp_workers = if is_emb {
+                1
+            } else {
+                p.map(|x| x.workers).unwrap_or(4)
+            };
+            let disp_min_workers = if is_emb {
+                1
+            } else {
+                p.map(|x| x.min_workers).unwrap_or(1)
+            };
+            let disp_queue_bound = if is_emb {
+                emb.map(|x| x.effective_queue_bound()).unwrap_or(16)
+            } else {
+                p.map(|x| x.effective_queue_bound()).unwrap_or(16)
+            };
+            let disp_queue_wait = if is_emb {
+                emb.map(|x| x.queue_wait_timeout_seconds).unwrap_or(2)
+            } else {
+                p.map(|x| x.queue_wait_timeout_seconds).unwrap_or(2)
+            };
+            let disp_drain = if is_emb {
+                emb.map(|x| x.shutdown_drain_timeout_seconds).unwrap_or(10)
+            } else {
+                p.map(|x| x.shutdown_drain_timeout_seconds).unwrap_or(10)
+            };
+            let disp_timeout = if is_emb {
+                emb.map(|x| x.request_timeout_seconds).unwrap_or(30)
+            } else {
+                p.map(|x| x.request_timeout_seconds).unwrap_or(30)
+            };
             if as_json {
                 println!(
                     "{}",
                     serde_json::json!({
                         "mode": cfg.runtime.mode,
-                        "execution_mode": p.map(|x| x.execution_mode.clone()).unwrap_or_else(|| "one-shot".to_string()),
+                        "execution_mode": disp_execution_mode,
                         "protocol_version": phpx_runtime::PROTOCOL_VERSION,
                         "php_target": cfg.runtime.php_version,
                         "php_actual": actual_php,
-                        "workers": p.map(|x| x.workers).unwrap_or(4),
-                        "min_workers": p.map(|x| x.min_workers).unwrap_or(1),
-                        "queue_bound": p.map(|x| x.effective_queue_bound()).unwrap_or(16),
-                        "queue_wait_timeout_seconds": p.map(|x| x.queue_wait_timeout_seconds).unwrap_or(2),
-                        "shutdown_drain_timeout_seconds": p.map(|x| x.shutdown_drain_timeout_seconds).unwrap_or(10),
+                        "workers": disp_workers,
+                        "min_workers": disp_min_workers,
+                        "queue_bound": disp_queue_bound,
+                        "queue_wait_timeout_seconds": disp_queue_wait,
+                        "shutdown_drain_timeout_seconds": disp_drain,
                         "restart_max_retries": p.map(|x| x.restart_max_retries).unwrap_or(5),
-                        "request_timeout_seconds": p.map(|x| x.request_timeout_seconds).unwrap_or(30),
+                        "request_timeout_seconds": disp_timeout,
                         "startup_timeout_seconds": p.map(|x| x.startup_timeout_seconds).unwrap_or(10),
                         "memory_limit": p.map(|x| x.memory_limit.clone()).unwrap_or_else(|| "256M".to_string()),
                         "docroot": format!("{}/{}", cfg.application.root, cfg.application.document_root),
@@ -692,8 +736,7 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
                 println!(
                     "  mode: {} | execution_mode: {} (protocol v{})",
                     cfg.runtime.mode,
-                    p.map(|x| x.execution_mode.clone())
-                        .unwrap_or_else(|| "one-shot".to_string()),
+                    disp_execution_mode,
                     phpx_runtime::PROTOCOL_VERSION
                 );
                 println!(
@@ -702,15 +745,11 @@ fn cmd_runtime(config_arg: Option<PathBuf>, as_json: bool, cmd: RuntimeCmd) -> i
                 );
                 println!(
                     "  workers: min={} max={} | queue_bound={} queue_wait={}s drain={}s",
-                    p.map(|x| x.min_workers).unwrap_or(1),
-                    p.map(|x| x.workers).unwrap_or(4),
-                    p.map(|x| x.effective_queue_bound()).unwrap_or(16),
-                    p.map(|x| x.queue_wait_timeout_seconds).unwrap_or(2),
-                    p.map(|x| x.shutdown_drain_timeout_seconds).unwrap_or(10),
+                    disp_min_workers, disp_workers, disp_queue_bound, disp_queue_wait, disp_drain,
                 );
                 println!(
                     "  request_timeout={}s startup_timeout={}s memory_limit={} (advisory, unenforced in one-shot) restarts={} backoff={}ms/{}ms recycle_every={}",
-                    p.map(|x| x.request_timeout_seconds).unwrap_or(30),
+                    disp_timeout,
                     p.map(|x| x.startup_timeout_seconds).unwrap_or(10),
                     p.map(|x| x.memory_limit.clone())
                         .unwrap_or_else(|| "256M".to_string()),
