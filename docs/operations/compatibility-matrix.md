@@ -74,7 +74,7 @@ Runbook matriks penuh: `php -m` di host target vs kebutuhan app; catat gap di si
 | `m4_compat` (vanilla/composer/laravel/wp/woo + /metrics) | PASS (process hijau; paritas + gateway embedded via `p2_embedded_gateway`, vanilla live di linked) |
 | `m3_cli` (`doctor/metrics/queue/scheduler/cache/storage`) | PASS (6/6) |
 | `p2_embedded_gateway` (pool embedded + routing + timeout eksplisit; stub fail-closed, linked live) | PASS (5/5) |
-| `p0d_laravel` (Laravel 12 asli: welcome, 404, JSON 405, session, multipart) | PASS (5/5) |
+| `p0d_laravel` (Laravel 12 asli: welcome, 404, JSON 405, session, multipart) | PASS (5/5) di Windows nativ dan CI Linux. Catatan WSL: mount `/mnt/d` (9p) yang terdegradasi membuat test ini timeout (`p9_client_rpc`, byte identik lolos 0,7 dtk di ext4 dan 5/5 di Windows) — artefak filesystem, bukan regresi; ulangi di mount sehat atau andalkan CI |
 | `p0d_wordpress` (WordPress 7.1 asli + WooCommerce 11.3: front, search, pretty, login, REST, comments, media auth, shop, product, dok cart/checkout, wc/v3; butuh install terprovisi + MySQL) | PASS (13/13), SKIP lantang bila tak terprovisi |
 | `p1a_resilience` (idle crash, sirkuit, drain in-flight x2, app-exit resync, reload, dok leak, timeline recovery, short soak) | PASS (9/9) |
 | `p0b_persistent` + `persistent` (pool terawasi, state machine, guardian) | PASS (3+14) |
